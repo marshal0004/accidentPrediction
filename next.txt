@@ -1,0 +1,323 @@
+accidentPredictionProjectNR
+├── accident-severity-predictor/
+│   ├── backend/
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── routes_data.py
+│   │   │   ├── routes_digital_twin.py
+│   │   │   ├── routes_eda.py
+│   │   │   ├── routes_models.py
+│   │   │   ├── routes_predict.py
+│   │   │   ├── routes_shap.py
+│   │   │   └── routes_what_if.py
+│   │   ├── cache/
+│   │   │   ├── 039314af7561f1a03d7978a49f1934fa33d25d28.json
+│   │   │   └── aa46fc15c18ed3db19a2503fd23c0e97d0bda83a.json
+│   │   ├── data/
+│   │   │   ├── mapped_accidents/
+│   │   │   │   └── delhi/
+│   │   │   │       ├── mapping_stats.json
+│   │   │   │       └── segment_mapping.json
+│   │   │   ├── road_networks/
+│   │   │   │   ├── bangalore/
+│   │   │   │   ├── dehradun/
+│   │   │   │   └── delhi/
+│   │   │   │       ├── delhi_edges.csv
+│   │   │   │       ├── delhi_metadata.json
+│   │   │   │       └── delhi_roads.graphml
+│   │   │   ├── ETP_4_New_Data_Accidents.csv
+│   │   │   └── Road.csv
+│   │   ├── ml/
+│   │   │   ├── models/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── gradient_boosting.py
+│   │   │   │   ├── logistic_regression.py
+│   │   │   │   ├── random_forest.py
+│   │   │   │   ├── svm_model.py
+│   │   │   │   └── xgboost_model.py
+│   │   │   ├── __init__.py
+│   │   │   ├── accident_segment_mapper.py
+│   │   │   ├── data_loader.py
+│   │   │   ├── digital_twin.py
+│   │   │   ├── evaluator.py
+│   │   │   ├── heatmap_generator.py
+│   │   │   ├── predictor.py
+│   │   │   ├── preprocessor.py
+│   │   │   ├── road_network_loader.py
+│   │   │   ├── scenario_simulator.py
+│   │   │   ├── segment_risk_calculator.py
+│   │   │   ├── shap_analyzer.py
+│   │   │   └── trainer.py
+│   │   ├── outputs/
+│   │   │   ├── digital_twin/
+│   │   │   │   ├── bangalore/
+│   │   │   │   ├── dehradun/
+│   │   │   │   └── delhi/
+│   │   │   │       ├── heatmap_grid.json
+│   │   │   │       ├── heatmap_segments.json
+│   │   │   │       ├── risk_stats.json
+│   │   │   │       ├── segment_risks.json
+│   │   │   │       ├── top_dangerous.json
+│   │   │   │       └── twin_metadata.json
+│   │   │   ├── models/
+│   │   │   │   ├── primary/
+│   │   │   │   │   ├── GradientBoosting_model.joblib
+│   │   │   │   │   ├── LogisticRegression_model.joblib
+│   │   │   │   │   ├── RandomForest_model.joblib
+│   │   │   │   │   ├── SVM_model.joblib
+│   │   │   │   │   └── XGBoost_model.joblib
+│   │   │   │   ├── secondary/
+│   │   │   │   │   ├── GradientBoosting_model.joblib
+│   │   │   │   │   ├── LogisticRegression_model.joblib
+│   │   │   │   │   ├── RandomForest_model.joblib
+│   │   │   │   │   ├── SVM_model.joblib
+│   │   │   │   │   └── XGBoost_model.joblib
+│   │   │   │   ├── feature_info_primary.json
+│   │   │   │   ├── feature_info_secondary.json
+│   │   │   │   ├── label_encoder.joblib
+│   │   │   │   ├── scaler.joblib
+│   │   │   │   ├── training_summary_primary.json
+│   │   │   │   └── training_summary_secondary.json
+│   │   │   ├── plots/
+│   │   │   │   ├── confusion_matrix_GradientBoosting.png
+│   │   │   │   ├── confusion_matrix_LogisticRegression.png
+│   │   │   │   ├── confusion_matrix_RandomForest.png
+│   │   │   │   ├── confusion_matrix_SVM.png
+│   │   │   │   ├── confusion_matrix_XGBoost.png
+│   │   │   │   ├── cv_boxplot.png
+│   │   │   │   ├── feature_importance_GradientBoosting.png
+│   │   │   │   ├── feature_importance_RandomForest.png
+│   │   │   │   ├── feature_importance_XGBoost.png
+│   │   │   │   ├── model_comparison_bar.png
+│   │   │   │   ├── roc_curves_all.png
+│   │   │   │   └── training_time_comparison.png
+│   │   │   ├── shap/
+│   │   │   │   ├── all_shap_results_primary.json
+│   │   │   │   ├── all_shap_results_secondary.json
+│   │   │   │   ├── shap_bar_GradientBoosting_primary.png
+│   │   │   │   ├── shap_bar_LogisticRegression_primary.png
+│   │   │   │   ├── shap_bar_LogisticRegression_secondary.png
+│   │   │   │   ├── shap_bar_RandomForest_primary.png
+│   │   │   │   ├── shap_bar_RandomForest_secondary.png
+│   │   │   │   ├── shap_bar_SVM_primary.png
+│   │   │   │   ├── shap_bar_XGBoost_primary.png
+│   │   │   │   ├── shap_bar_XGBoost_secondary.png
+│   │   │   │   ├── shap_feature_importance_GradientBoosting_primary.json
+│   │   │   │   ├── shap_feature_importance_LogisticRegression_primary.json
+│   │   │   │   ├── shap_feature_importance_LogisticRegression_secondary.json
+│   │   │   │   ├── shap_feature_importance_RandomForest_primary.json
+│   │   │   │   ├── shap_feature_importance_RandomForest_secondary.json
+│   │   │   │   ├── shap_feature_importance_SVM_primary.json
+│   │   │   │   ├── shap_feature_importance_XGBoost_primary.json
+│   │   │   │   ├── shap_feature_importance_XGBoost_secondary.json
+│   │   │   │   ├── shap_summary_GradientBoosting_primary.png
+│   │   │   │   ├── shap_summary_LogisticRegression_primary.png
+│   │   │   │   ├── shap_summary_LogisticRegression_secondary.png
+│   │   │   │   ├── shap_summary_RandomForest_primary.png
+│   │   │   │   ├── shap_summary_RandomForest_secondary.png
+│   │   │   │   ├── shap_summary_SVM_primary.png
+│   │   │   │   ├── shap_summary_XGBoost_primary.png
+│   │   │   │   ├── shap_summary_XGBoost_secondary.png
+│   │   │   │   ├── shap_values_GradientBoosting_primary.npy
+│   │   │   │   ├── shap_values_LogisticRegression_primary.npy
+│   │   │   │   ├── shap_values_LogisticRegression_secondary.npy
+│   │   │   │   ├── shap_values_RandomForest_primary.npy
+│   │   │   │   ├── shap_values_RandomForest_secondary.npy
+│   │   │   │   ├── shap_values_SVM_primary.npy
+│   │   │   │   ├── shap_values_XGBoost_primary.npy
+│   │   │   │   └── shap_values_XGBoost_secondary.npy
+│   │   │   ├── chart_data_accidents_by_day_primary.json
+│   │   │   ├── chart_data_accidents_by_day_secondary.json
+│   │   │   ├── chart_data_accidents_by_hour_primary.json
+│   │   │   ├── chart_data_accidents_by_hour_secondary.json
+│   │   │   ├── chart_data_accidents_by_vehicle_primary.json
+│   │   │   ├── chart_data_accidents_by_vehicle_secondary.json
+│   │   │   ├── chart_data_accidents_by_weather_primary.json
+│   │   │   ├── chart_data_accidents_by_weather_secondary.json
+│   │   │   ├── chart_data_class_distribution_primary.json
+│   │   │   ├── chart_data_class_distribution_secondary.json
+│   │   │   ├── chart_data_correlation_matrix_primary.json
+│   │   │   ├── chart_data_correlation_matrix_secondary.json
+│   │   │   ├── chart_data_monthly_trend_primary.json
+│   │   │   ├── chart_data_severity_by_cause_primary.json
+│   │   │   ├── chart_data_severity_by_cause_secondary.json
+│   │   │   ├── eda_summary.json
+│   │   │   ├── filter_options.json
+│   │   │   ├── model_comparison.csv
+│   │   │   ├── model_comparison.json
+│   │   │   ├── pipeline_summary.json
+│   │   │   └── shap_feature_importance.json
+│   │   ├── app.db
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── main.py
+│   │   ├── requirements.txt
+│   │   └── run_pipeline.py
+│   ├── frontend/
+│   │   ├── public/
+│   │   │   ├── favicon.ico
+│   │   │   ├── index.html
+│   │   │   ├── logo192.png
+│   │   │   ├── logo512.png
+│   │   │   ├── manifest.json
+│   │   │   └── robots.txt
+│   │   ├── src/
+│   │   │   ├── api/
+│   │   │   │   └── apiClient.js
+│   │   │   ├── components/
+│   │   │   │   ├── charts/
+│   │   │   │   │   ├── AreaTimeChart.jsx
+│   │   │   │   │   ├── BoxPlotChart.jsx
+│   │   │   │   │   ├── CorrelationHeatmap.jsx
+│   │   │   │   │   ├── DonutChart.jsx
+│   │   │   │   │   ├── GroupedBarChart.jsx
+│   │   │   │   │   ├── HorizontalBarChart.jsx
+│   │   │   │   │   ├── LineChartComponent.jsx
+│   │   │   │   │   ├── ModelComparisonBar.jsx
+│   │   │   │   │   └── ROCCurve.jsx
+│   │   │   │   ├── common/
+│   │   │   │   │   ├── ChartTile.jsx
+│   │   │   │   │   ├── ConfidenceGauge.jsx
+│   │   │   │   │   ├── ConfusionMatrix.jsx
+│   │   │   │   │   ├── DataTable.jsx
+│   │   │   │   │   ├── FilterBar.jsx
+│   │   │   │   │   ├── KPICard.jsx
+│   │   │   │   │   ├── LoadingSpinner.jsx
+│   │   │   │   │   └── SeverityBadge.jsx
+│   │   │   │   ├── layout/
+│   │   │   │   │   ├── Header.jsx
+│   │   │   │   │   ├── Layout.jsx
+│   │   │   │   │   └── Sidebar.jsx
+│   │   │   │   └── prediction/
+│   │   │   │       ├── BatchUpload.jsx
+│   │   │   │       ├── PredictionForm.jsx
+│   │   │   │       └── PredictionResult.jsx
+│   │   │   ├── hooks/
+│   │   │   │   └── useApi.js
+│   │   │   ├── pages/
+│   │   │   │   ├── DataPage.jsx
+│   │   │   │   ├── FeaturesPage.jsx
+│   │   │   │   ├── ModelsPage.jsx
+│   │   │   │   ├── OverviewPage.jsx
+│   │   │   │   └── PredictPage.jsx
+│   │   │   ├── utils/
+│   │   │   │   ├── constants.js
+│   │   │   │   ├── formatters.js
+│   │   │   │   └── helpers.js
+│   │   │   ├── App.css
+│   │   │   ├── App.js
+│   │   │   ├── App.test.js
+│   │   │   ├── index.css
+│   │   │   ├── index.js
+│   │   │   ├── logo.svg
+│   │   │   ├── reportWebVitals.js
+│   │   │   └── setupTests.js
+│   │   ├── .gitignore
+│   │   ├── package-lock.json
+│   │   ├── package.json
+│   │   ├── postcss.config.js
+│   │   ├── README.md
+│   │   └── tailwind.config.js
+│   └── train_single_model.py
+├── package-lock.json
+└── package.json
+ here is my current folder structure   and here what i have done  or what is my current progress -   ✅ STEP 1.1: config.py          ← DONE
+     ↓
+🔄 STEP 1.2: road_network_loader.py  ← NEXT     🎉 config.py validated successfully! STEP 1.1 Complete! Moving to STEP 1.2 🎉 road_network_loader.py validated successfully!
+
+NOTE: Run get_or_download_network() to download Delhi road network
+      This requires internet and takes 1-3 minutes STEP 1.2 Complete! Moving to STEP 1.3 ✅ STEP 1.1: config.py                    ← DONE
+✅ STEP 1.2: road_network_loader.py       ← DONE
+✅ STEP 1.3: accident_segment_mapper.py   ← DONE
+     ↓
+🔄 STEP 1.4: segment_risk_calculator.py  ← NEXT 🎉 accident_segment_mapper.py validated successfully!
+
+NOTE: Full mapping test requires road network download
+      Run digital_twin.py to do complete pipeline test ✅ Batch calculation works
+
+Testing top dangerous segments...
+  Top 2 dangerous: ['seg_1', 'seg_2']
+✅ Top dangerous query works
+
+🎉 segment_risk_calculator.py validated successfully!
+
+NOTE: Predictive risk uses default value (50) without ML predictor
+      Full functionality requires trained model integration✅ STEP 1.1: config.py                    ← DONE
+✅ STEP 1.2: road_network_loader.py       ← DONE
+✅ STEP 1.3: accident_segment_mapper.py   ← DONE
+✅ STEP 1.4: segment_risk_calculator.py   ← DONE
+     ↓
+🔄 STEP 1.5: scenario_simulator.py       ← NEXT ✅ STEP 1.1: config.py                    ← DONE
+✅ STEP 1.2: road_network_loader.py       ← DONE
+✅ STEP 1.3: accident_segment_mapper.py   ← DONE
+✅ STEP 1.4: segment_risk_calculator.py   ← DONE
+✅ STEP 1.5: scenario_simulator.py        ← DONE
+     ↓
+🔄 STEP 1.6: heatmap_generator.py        ← NEXT 🎉 scenario_simulator.py validated successfully!
+
+Available interventions:
+  - street_lights: Street Lights Installation
+  - speed_cameras: Speed Camera Installation
+  - median_barriers: Median Barrier Installation
+  - road_widening: Road Widening
+  - rumble_strips: Rumble Strip Installation
+  - signage_improvement: Road Signage Improvement ✅ STEP 1.1: config.py                    ← DONE
+✅ STEP 1.2: road_network_loader.py       ← DONE
+✅ STEP 1.3: accident_segment_mapper.py   ← DONE
+✅ STEP 1.4: segment_risk_calculator.py   ← DONE
+✅ STEP 1.5: scenario_simulator.py        ← DONE
+✅ STEP 1.6: heatmap_generator.py         ← DONE
+     ↓
+🔄 STEP 1.7: digital_twin.py (orchestrator) ← NEXT 🎉 heatmap_generator.py validated successfully!
+
+NOTE: Folium map generation requires complete road network
+      Run digital_twin.py for full pipeline with real data ✅ STEP 1.1: config.py                    ← DONE
+✅ STEP 1.2: road_network_loader.py       ← DONE
+✅ STEP 1.3: accident_segment_mapper.py   ← DONE
+✅ STEP 1.4: segment_risk_calculator.py   ← DONE
+✅ STEP 1.5: scenario_simulator.py        ← DONE
+✅ STEP 1.6: heatmap_generator.py         ← DONE
+✅ STEP 1.7: digital_twin.py              ← DONE
+     ↓
+🔄 STEP 1.8: API routes_digital_twin.py  ← NEXT ✅ STEP 1.1-1.7: All ML modules          ← DONE
+✅ STEP 1.8: routes_digital_twin.py      ← DONE
+✅ STEP 1.9: routes_what_if.py           ← DONE
+     ↓
+🔄 STEP 1.10: Update main.py             ← NEXT 🎉 API routes validated successfully!
+
+Total API endpoints: 14 ✅ STEP 1.1-1.7: All ML modules          ← DONE
+✅ STEP 1.8: routes_digital_twin.py      ← DONE
+✅ STEP 1.9: routes_what_if.py           ← DONE
+✅ STEP 1.10: main.py updated            ← DONE
+     ↓
+🔄 STEP 1.11: Build Digital Twin         ← NEXT
+               (Download road network +
+                Map accidents +
+                Calculate risks) ✅ Server Running Perfectly!
+Everything working:
+
+✅ 5 ML models loaded
+✅ All API endpoints registered
+✅ Digital Twin endpoints ready
+✅ Cities listed correctly
+✅ Health check passing
+Two minor warnings to fix (not critical but clean them up):
+
+  Twin is Building! Let it Complete.
+I can see Step 3 is done and Step 4 is running. Let it finish. [1/4] Road Network Download  ← ✅ DONE
+[2/4] Accident Mapping       ← ✅ DONE  
+[3/4] Risk Calculation       ← ✅ DONE
+      1,360 segments
+      High risk: 450
+[4/4] Heatmap Generation     ← 🔄 RUNNING NOW 🔍 Twin Build is Incomplete!
+I can see:
+
+✅ segment_risks.json (612 KB)
+✅ risk_stats.json (335 B)
+Missing:
+
+❌ heatmap_grid.json
+❌ heatmap_segments.json
+❌ twin_metadata.json
+❌ top_dangerous.json
+The build stopped at Step 4 (Heatmap Generation). That's why status shows "loaded_partial".

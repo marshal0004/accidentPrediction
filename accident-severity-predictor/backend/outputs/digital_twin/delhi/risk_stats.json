@@ -1,0 +1,17 @@
+{
+  "total_segments": 1365,
+  "risk_distribution": {
+    "Very Low": 0,
+    "Low": 410,
+    "Moderate": 499,
+    "High": 456,
+    "Very High": 0
+  },
+  "mean_risk": 51.23,
+  "median_risk": 47.21,
+  "std_risk": 13.87,
+  "min_risk": 31.24,
+  "max_risk": 70.0,
+  "high_risk_segments": 456,
+  "calculated_at": "2026-04-13T07:00:29.354000"
+}

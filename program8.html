@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Javascript functions Demo</title>
+    <script>
+        function findVowel(){
+            let str = document.getElementById("inputstring").value
+            let vowels = "aeiouAEIOU"
+            let position = -1;
+            for(let i = 0 ; i < str.length; i++){
+                if(vowels.includes(str[i])) {
+                    position = i + 1;
+                    break
+                }
+            }
+
+            if(position === -1){
+                document.getElementById("result1").innerHTML = "vowel found.";
+            }
+            else{
+                document.getElementById("result1").innerHTML = "leftmost vowel position: " +position;
+            }
+        }
+        function reverseNumber(){
+            let num = document.getElementById("inputNumber").value;
+            let  reversed = num.split("").reverse().join("");
+            document.getElementById("result2").innerHTML= "reversed number :" +reversed ;
+        }
+    </script>
+</head>
+<body style="font-family: Arial, Helvetica, sans-serif; text-align: center; margin-top: 50px;">
+    <h1>Javascript function demonstration</h1>
+    <h2> enter leftmost vowel</h2>
+    <p>enter a string to find the postion of the leftmost vowel;
+    </p>
+    <input type="text" name="" id="inputstring">
+    <br><br>
+    <button onclick="findVowel()"> find vowel postion</button>
+    <p id="result1" ></p>
+    <h2>reverse a string</h2>
+    <p>enter a no to reverse its digit</p>
+    <input type="text" name="" id="inputNumber">
+    <br><br>
+    <button onclick="reverseNumber()">reverse Number</button>
+    <p id="result2"></p>
+</body>
+</html>

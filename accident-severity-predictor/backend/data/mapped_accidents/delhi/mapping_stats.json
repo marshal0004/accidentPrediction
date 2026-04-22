@@ -1,0 +1,10 @@
+{
+  "total_accidents": 12548,
+  "mapped_accidents": 12548,
+  "unmapped_accidents": 0,
+  "mapping_rate_pct": 5.59,
+  "segments_with_accidents": 1365,
+  "mapped_at": "2026-04-13T07:00:29.283792",
+  "etp4_segments": 34,
+  "road_csv_segments": 1336
+}

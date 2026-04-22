@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# ML outputs (large binary files)
+backend/outputs/models/**/*.joblib
+backend/outputs/shap/*.npy
+backend/outputs/plots/*.png
+backend/outputs/shap/*.png
+
+# Database
+*.db
+
+# Node
+node_modules/
+frontend/node_modules/
+build/
+frontend/build/
+
+# OS
+.DS_Storepackage-lock.json

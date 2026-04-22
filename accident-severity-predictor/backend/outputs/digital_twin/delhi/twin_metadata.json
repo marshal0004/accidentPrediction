@@ -1,0 +1,17 @@
+{
+  "city_key": "delhi",
+  "city_name": "New Delhi",
+  "built_at": "2026-04-13T07:02:21.931350",
+  "status": "ready",
+  "build_duration_seconds": 130.65,
+  "total_segments": 24399,
+  "mapped_accidents": 12548,
+  "segments_with_accidents": 1365,
+  "high_risk_segments": 456,
+  "step_times": {
+    "road_network": 1.45,
+    "accident_mapping": 16.62,
+    "risk_calculation": 0.02,
+    "heatmap_generation": 112.56
+  }
+}
