@@ -320,4 +320,14 @@ Missing:
 ❌ heatmap_segments.json
 ❌ twin_metadata.json
 ❌ top_dangerous.json
-The build stopped at Step 4 (Heatmap Generation). That's why status shows "loaded_partial".
+The build stopped at Step 4 (Heatmap Generation). That's why status shows "loaded_partial".{
+
+  "role": "senior software architect",
+
+  "task": "Deep-analyze this  codebase and  Extract: (1) project purpose & tech stack, (2) system architecture & design patterns, (3) every file/folder with its role & functionality, (4) how components connect — data flow, API contracts, dependencies, entry points. (5) Output a structured Markdown report with sections: Overview, Architecture, File Map, Component Connections, Key Flows.",
+
+  "output": "Save the full report to projectDeepView.md with 1000+ lines . Be exhaustive, precise, and technical. No fluff.",
+
+
+
+}  and  give me output fast i dont have so much time  use correct tools

@@ -22,14 +22,13 @@ const MAX_MAP_SEGMENTS = 500;
 
 // ─── Use backend color directly, fallback to calculated ───────────────────────
 const getSegmentColor = (seg) => {
-  // Backend provides color field directly - use it!
-  if (seg.color) return seg.color;
+  // Use risk_score for colors visible on LIGHT map background
   const score = seg.risk_score ?? 0;
-  if (score >= 80) return '#ff0000';
-  if (score >= 60) return '#ff8000';
-  if (score >= 40) return '#ffff00';
-  if (score >= 20) return '#80ff00';
-  return '#00ff00';
+  if (score >= 60) return '#DC2626';  // red - high risk
+  if (score >= 40) return '#EA580C';  // orange - moderate
+  if (score >= 20) return '#D97706';  // amber - low-moderate
+  if (score > 0)   return '#16A34A';  // green - low risk
+  return '#6B7280';                   // gray - no data
 };
 
 const getSegmentWeight = (seg) => {
@@ -331,14 +330,14 @@ const DigitalTwinPage = () => {
           </div>
         </div>
 
-        {/* Color scale from backend */}
+        {/* Color scale */}
         <div className="flex items-center gap-3 mt-3 flex-wrap">
           {[
-            { label: 'Very Low 0-20%',  color: '#00ff00' },
-            { label: 'Low 20-40%',      color: '#80ff00' },
-            { label: 'Moderate 40-60%', color: '#ffff00' },
-            { label: 'High 60-80%',     color: '#ff8000' },
-            { label: 'Very High 80%+',  color: '#ff0000' },
+            { label: 'No Data',         color: '#6B7280' },
+            { label: 'Low Risk <20%',   color: '#16A34A' },
+            { label: 'Low-Mod 20-40%',  color: '#D97706' },
+            { label: 'Moderate 40-60%', color: '#EA580C' },
+            { label: 'High Risk 60%+',  color: '#DC2626' },
           ].map((l) => (
             <div key={l.label} className="flex items-center gap-1.5">
               <div className="w-6 h-2 rounded-sm" style={{ backgroundColor: l.color }} />
@@ -388,8 +387,8 @@ const DigitalTwinPage = () => {
               updateWhenIdle={true}
             >
               <TileLayer
-                attribution='&copy; OpenStreetMap contributors &copy; CARTO'
-                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 maxZoom={19}
               />
               <MapRecenter center={cityCenter} zoom={cityZoom} />
