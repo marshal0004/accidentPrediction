@@ -5,9 +5,7 @@ const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 const apiClient = axios.create({
   baseURL: API_BASE,
   timeout: 120000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  headers: { 'Content-Type': 'application/json' },
 });
 
 apiClient.interceptors.response.use(
@@ -63,49 +61,28 @@ export const api = {
   dataPreview: (datasetKey = 'primary', page = 1, perPage = 25) =>
     apiClient.get(`/api/data/preview/${datasetKey}`, { params: { page, per_page: perPage } }),
 
-  // ============================================
-  // DIGITAL TWIN API
-  // ============================================
+  // Delhi Datasets
+  delhiDatasets: () => apiClient.get('/api/delhi/datasets'),
 
+  // Digital Twin
   twinCities: () => apiClient.get('/api/twin/cities'),
-
   twinInitialize: (cityKey, forceRebuild = false) =>
     apiClient.get(`/api/twin/${cityKey}/initialize`, {
       params: { force_rebuild: forceRebuild },
       timeout: 600000,
     }),
-
   twinMetadata: (cityKey) => apiClient.get(`/api/twin/${cityKey}/metadata`),
-
   twinHeatmap: (cityKey, type = 'segments', riskThreshold = 0) =>
-    apiClient.get(`/api/twin/${cityKey}/heatmap`, {
-      params: { type, risk_threshold: riskThreshold },
-    }),
-
-  // FIXED: removed min_risk default so backend uses its own default (60)
-  // Pass explicit 0 only when you want ALL segments
+    apiClient.get(`/api/twin/${cityKey}/heatmap`, { params: { type, risk_threshold: riskThreshold } }),
   twinTopDangerous: (cityKey, limit = 15, minRisk = 0) =>
-    apiClient.get(`/api/twin/${cityKey}/segments/top-dangerous`, {
-      params: { limit, min_risk: minRisk },
-    }),
-
+    apiClient.get(`/api/twin/${cityKey}/segments/top-dangerous`, { params: { limit, min_risk: minRisk } }),
   twinSegmentDetails: (cityKey, segmentId) =>
     apiClient.get(`/api/twin/${cityKey}/segment/${segmentId}`),
-
   twinStats: (cityKey) => apiClient.get(`/api/twin/${cityKey}/stats`),
-
   twinSimulate: (cityKey, segmentId, scenarioType, params = {}) =>
-    apiClient.post(
-      `/api/twin/${cityKey}/segment/${segmentId}/simulate`,
-      null,
-      {
-        params: {
-          scenario_type: scenarioType,
-          ...params,
-        },
-      }
-    ),
-
+    apiClient.post(`/api/twin/${cityKey}/segment/${segmentId}/simulate`, null, {
+      params: { scenario_type: scenarioType, ...params },
+    }),
   twinRefresh: (cityKey) => apiClient.post(`/api/twin/${cityKey}/refresh`),
 };
 

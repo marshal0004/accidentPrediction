@@ -39,6 +39,7 @@ from api.routes_data import router as data_router
 # NEW DIGITAL TWIN ROUTERS
 # ─────────────────────────────────────────────
 from api.routes_digital_twin import router as digital_twin_router
+from ml.accident_segment_mapper_delhi_patch import *  # Delhi datasets patch
 from api.routes_digital_twin import digital_twins
 from api.routes_what_if import router as what_if_router
 

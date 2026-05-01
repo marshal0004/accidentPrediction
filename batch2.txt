@@ -1,0 +1,2190 @@
+========== backend/ml/predictor.py ==========
+import os
+import json
+import numpy as np
+import joblib
+from config import MODELS_DIR, SHAP_DIR
+
+
+class AccidentPredictor:
+    """Inference engine for accident severity prediction."""
+
+    def __init__(self, dataset_key="primary"):
+        self.dataset_key = dataset_key
+        self.models = {}
+        self.scaler = None
+        self.label_encoder = None
+        self.feature_names = []
+        self.label_mapping = {}
+        self.loaded = False
+
+    def load_artifacts(self):
+        """Load all trained models and preprocessing artifacts."""
+        print(f"\n  Loading prediction artifacts for '{self.dataset_key}'...")
+
+        scaler_path = os.path.join(MODELS_DIR, "scaler.joblib")
+        if os.path.exists(scaler_path):
+            self.scaler = joblib.load(scaler_path)
+            print(f"  [OK] Scaler loaded")
+        else:
+            print(f"  [WARNING] Scaler not found at {scaler_path}")
+
+        le_path = os.path.join(MODELS_DIR, "label_encoder.joblib")
+        if os.path.exists(le_path):
+            self.label_encoder = joblib.load(le_path)
+            print(f"  [OK] Label encoder loaded")
+        else:
+            print(f"  [WARNING] Label encoder not found at {le_path}")
+
+        fi_path = os.path.join(MODELS_DIR, f"feature_info_{self.dataset_key}.json")
+        if os.path.exists(fi_path):
+            with open(fi_path) as f:
+                fi = json.load(f)
+            self.feature_names = fi.get("feature_names", [])
+            self.label_mapping = fi.get("label_mapping", {})
+            print(f"  [OK] Feature info loaded ({len(self.feature_names)} features)")
+        else:
+            print(f"  [WARNING] Feature info not found at {fi_path}")
+
+        model_dir = os.path.join(MODELS_DIR, self.dataset_key)
+        model_names = [
+            "RandomForest",
+            "XGBoost",
+            "GradientBoosting",
+            "SVM",
+            "LogisticRegression",
+        ]
+
+        for name in model_names:
+            model_path = os.path.join(model_dir, f"{name}_model.joblib")
+            if os.path.exists(model_path):
+                self.models[name] = joblib.load(model_path)
+                print(f"  [OK] {name} model loaded from {model_path}")
+            else:
+                old_path = os.path.join(
+                    MODELS_DIR, f"{name}_{self.dataset_key}_model.joblib"
+                )
+                if os.path.exists(old_path):
+                    self.models[name] = joblib.load(old_path)
+                    print(f"  [OK] {name} model loaded from {old_path}")
+                else:
+                    print(f"  [SKIP] {name} model not found")
+
+        self.loaded = len(self.models) > 0
+        print(
+            f"  [{'OK' if self.loaded else 'ERROR'}] {len(self.models)} models loaded"
+        )
+        return self.loaded
+
+    def prepare_input(self, input_data):
+        """Convert raw input dict to feature vector matching training features."""
+        feature_vector = np.zeros(len(self.feature_names))
+
+        for i, fname in enumerate(self.feature_names):
+            fname_lower = fname.lower()
+
+            for key, value in input_data.items():
+                key_lower = key.lower()
+
+                if key_lower == fname_lower:
+                    if isinstance(value, (int, float)):
+                        feature_vector[i] = value
+                    break
+
+                if fname_lower.startswith(key_lower + "_"):
+                    suffix = fname[len(key) + 1 :]
+                    if (
+                        isinstance(value, str)
+                        and value.strip().lower() == suffix.lower()
+                    ):
+                        feature_vector[i] = 1.0
+                    break
+
+                if "_freq" in fname_lower and key_lower in fname_lower:
+                    feature_vector[i] = 0.05
+                    break
+
+        if "Hour" in self.feature_names:
+            time_str = input_data.get("Time_of_Accident", "12:00")
+            try:
+                parts = str(time_str).split(":")
+                hour = int(parts[0])
+                idx = self.feature_names.index("Hour")
+                feature_vector[idx] = hour
+            except (ValueError, IndexError):
+                pass
+
+        if "Is_Night" in self.feature_names:
+            try:
+                hour = feature_vector[self.feature_names.index("Hour")]
+                idx = self.feature_names.index("Is_Night")
+                feature_vector[idx] = 1.0 if (hour >= 21 or hour < 6) else 0.0
+            except (ValueError, IndexError):
+                pass
+
+        if "Is_Weekend" in self.feature_names:
+            day = input_data.get("Day_of_Week", "Monday")
+            weekend_days = ["saturday", "sunday"]
+            try:
+                idx = self.feature_names.index("Is_Weekend")
+                feature_vector[idx] = 1.0 if str(day).lower() in weekend_days else 0.0
+            except (ValueError, IndexError):
+                pass
+
+        if "Number_of_Vehicles" in self.feature_names:
+            try:
+                idx = self.feature_names.index("Number_of_Vehicles")
+                feature_vector[idx] = float(input_data.get("Number_of_Vehicles", 2))
+            except (ValueError, IndexError):
+                pass
+
+        if self.scaler is not None:
+            feature_vector = self.scaler.transform(feature_vector.reshape(1, -1))
+        else:
+            feature_vector = feature_vector.reshape(1, -1)
+
+        return feature_vector
+
+    def predict(self, input_data, model_name="XGBoost"):
+        """Make a prediction using specified model."""
+        if not self.loaded:
+            return {"error": "Models not loaded. Run training first."}
+
+        if model_name not in self.models:
+            available = list(self.models.keys())
+            if available:
+                model_name = available[0]
+                print(f"  [INFO] Requested model not found. Using {model_name}")
+            else:
+                return {"error": "No models available."}
+
+        model = self.models[model_name]
+        X = self.prepare_input(input_data)
+
+        prediction_code = int(model.predict(X)[0])
+
+        prediction_label = self.label_mapping.get(
+            str(prediction_code), str(prediction_code)
+        )
+
+        probabilities = {}
+        confidence = 0.0
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X)[0]
+            for i, p in enumerate(proba):
+                class_label = self.label_mapping.get(str(i), str(i))
+                probabilities[class_label] = round(float(p), 4)
+            confidence = round(float(max(proba)), 4)
+        else:
+            confidence = 1.0
+            probabilities[prediction_label] = 1.0
+
+        top_risk_factors = []
+        shap_fi_path = os.path.join(
+            SHAP_DIR, f"shap_feature_importance_{model_name}_{self.dataset_key}.json"
+        )
+        if os.path.exists(shap_fi_path):
+            with open(shap_fi_path) as f:
+                shap_features = json.load(f)
+            for feat in shap_features[:3]:
+                top_risk_factors.append(
+                    {"feature": feat["name"], "contribution": feat["importance"]}
+                )
+
+        result = {
+            "prediction": prediction_label,
+            "prediction_code": prediction_code,
+            "confidence": confidence,
+            "probabilities": probabilities,
+            "top_risk_factors": top_risk_factors,
+            "model_used": model_name,
+        }
+
+        return result
+
+    def predict_batch(self, df, model_name="XGBoost"):
+        """Make predictions for a batch of records."""
+        predictions = []
+        for idx, row in df.iterrows():
+            input_data = row.to_dict()
+            result = self.predict(input_data, model_name)
+            result["row"] = idx + 1
+            predictions.append(result)
+
+        summary = {}
+        for p in predictions:
+            label = p.get("prediction", "Unknown")
+            summary[label] = summary.get(label, 0) + 1
+
+        return {
+            "total_records": len(predictions),
+            "predictions": predictions,
+            "summary": summary,
+        }
+
+    def get_available_models(self):
+        """Return list of loaded model names."""
+        return list(self.models.keys())
+
+    def get_feature_names(self):
+        """Return list of feature names used by models."""
+        return self.feature_names
+
+    def get_label_mapping(self):
+        """Return label mapping dict."""
+        return self.label_mapping
+
+========== backend/ml/road_network_loader.py ==========
+# backend/ml/road_network_loader.py
+
+import os
+import json
+import time
+import logging
+from datetime import datetime, timedelta
+
+import osmnx as ox
+import networkx as nx
+import geopandas as gpd
+import pandas as pd
+import numpy as np
+
+from config import ROAD_NETWORKS_DIR, CITIES_CONFIG, OSM_CACHE_EXPIRY_DAYS
+
+# ─────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────
+# OSMNX SETTINGS
+# ─────────────────────────────────────────────
+ox.settings.log_console = False
+ox.settings.use_cache = True
+ox.settings.timeout = 300
+
+
+class RoadNetworkLoader:
+    """
+    Downloads, caches, and loads road networks
+    from OpenStreetMap using OSMnx.
+    """
+
+    def __init__(self, city_key: str):
+        """
+        Initialize loader for a specific city.
+
+        Args:
+            city_key: Key from CITIES_CONFIG
+                      e.g. 'delhi', 'dehradun'
+        """
+        if city_key not in CITIES_CONFIG:
+            raise ValueError(
+                f"City '{city_key}' not found in CITIES_CONFIG. "
+                f"Available: {list(CITIES_CONFIG.keys())}"
+            )
+
+        self.city_key = city_key
+        self.city_config = CITIES_CONFIG[city_key]
+        self.city_name = self.city_config["display_name"]
+        self.osm_query = self.city_config["osm_query"]
+        self.network_type = self.city_config["network_type"]
+
+        # File paths
+        self.cache_dir = os.path.join(ROAD_NETWORKS_DIR, city_key)
+        self.graphml_path = os.path.join(self.cache_dir, f"{city_key}_roads.graphml")
+        self.metadata_path = os.path.join(self.cache_dir, f"{city_key}_metadata.json")
+        self.edges_path = os.path.join(self.cache_dir, f"{city_key}_edges.csv")
+
+        # Create cache directory
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        # Network object (loaded lazily)
+        self._graph = None
+        self._edges_gdf = None
+        self._nodes_gdf = None
+
+        logger.info(f"RoadNetworkLoader initialized for: {self.city_name}")
+
+    # ─────────────────────────────────────────
+    # CACHE MANAGEMENT
+    # ─────────────────────────────────────────
+
+    def is_cache_valid(self) -> bool:
+        """
+        Check if cached network exists and is not expired.
+
+        Returns:
+            True if cache is valid, False otherwise
+        """
+        if not os.path.exists(self.graphml_path):
+            logger.info(f"No cache found for {self.city_key}")
+            return False
+
+        if not os.path.exists(self.metadata_path):
+            logger.info(f"No metadata found for {self.city_key}")
+            return False
+
+        # Check expiry
+        try:
+            with open(self.metadata_path, "r") as f:
+                metadata = json.load(f)
+
+            cached_at = datetime.fromisoformat(metadata.get("cached_at", "2000-01-01"))
+            expiry = cached_at + timedelta(days=OSM_CACHE_EXPIRY_DAYS)
+
+            if datetime.now() > expiry:
+                logger.info(
+                    f"Cache expired for {self.city_key} "
+                    f"(cached at {cached_at.date()})"
+                )
+                return False
+
+            logger.info(
+                f"Valid cache found for {self.city_key} "
+                f"(cached at {cached_at.date()})"
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(f"Cache metadata error: {e}")
+            return False
+
+    def _save_metadata(self, graph):
+        """Save metadata about the downloaded network."""
+        try:
+            nodes, edges = ox.graph_to_gdfs(graph)
+            metadata = {
+                "city_key": self.city_key,
+                "city_name": self.city_name,
+                "osm_query": self.osm_query,
+                "cached_at": datetime.now().isoformat(),
+                "total_nodes": len(nodes),
+                "total_edges": len(edges),
+                "bbox": self.city_config["bbox"],
+                "center": self.city_config["center"],
+                "network_type": self.network_type,
+                "crs": "EPSG:4326",
+            }
+            with open(self.metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"Metadata saved: {self.metadata_path}")
+        except Exception as e:
+            logger.warning(f"Could not save metadata: {e}")
+
+    # ─────────────────────────────────────────
+    # DOWNLOAD
+    # ─────────────────────────────────────────
+
+    def download_network(self, retries: int = 3) -> nx.MultiDiGraph:
+        """
+        Download road network from OpenStreetMap.
+
+        Args:
+            retries: Number of retry attempts on failure
+
+        Returns:
+            NetworkX MultiDiGraph of road network
+        """
+        logger.info(
+            f"Downloading road network for {self.city_name} " f"from OpenStreetMap..."
+        )
+        logger.info("This may take 1-3 minutes for large cities...")
+
+        last_error = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                logger.info(f"Attempt {attempt}/{retries}...")
+                start_time = time.time()
+
+                graph = ox.graph_from_place(
+                    self.osm_query, network_type=self.network_type, simplify=True
+                )
+
+                elapsed = time.time() - start_time
+                nodes_count = len(graph.nodes)
+                edges_count = len(graph.edges)
+
+                logger.info(
+                    f"Download complete in {elapsed:.1f}s: "
+                    f"{nodes_count:,} nodes, {edges_count:,} edges"
+                )
+                return graph
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Attempt {attempt} failed: {e}")
+                if attempt < retries:
+                    wait = attempt * 10
+                    logger.info(f"Retrying in {wait} seconds...")
+                    time.sleep(wait)
+
+        raise ConnectionError(
+            f"Failed to download network for {self.city_name} "
+            f"after {retries} attempts. Last error: {last_error}"
+        )
+
+    # ─────────────────────────────────────────
+    # CACHE OPERATIONS
+    # ─────────────────────────────────────────
+
+    def cache_network(self, graph: nx.MultiDiGraph):
+        """
+        Save network to GraphML file for future use.
+
+        Args:
+            graph: NetworkX graph to cache
+        """
+        try:
+            logger.info(f"Caching network to {self.graphml_path}...")
+            ox.save_graphml(graph, self.graphml_path)
+            self._save_metadata(graph)
+
+            # Also save edges as CSV for quick loading
+            self._save_edges_csv(graph)
+
+            size_mb = os.path.getsize(self.graphml_path) / (1024 * 1024)
+            logger.info(f"Network cached: {size_mb:.1f} MB")
+
+        except Exception as e:
+            logger.error(f"Failed to cache network: {e}")
+            raise
+
+    def _save_edges_csv(self, graph: nx.MultiDiGraph):
+        """Save edges as CSV for fast loading."""
+        try:
+            nodes_gdf, edges_gdf = ox.graph_to_gdfs(graph)
+
+            # Select useful columns only
+            keep_cols = []
+            possible_cols = [
+                "name",
+                "highway",
+                "length",
+                "maxspeed",
+                "lanes",
+                "oneway",
+                "geometry",
+            ]
+            for col in possible_cols:
+                if col in edges_gdf.columns:
+                    keep_cols.append(col)
+
+            edges_subset = edges_gdf[keep_cols].copy()
+
+            # Convert geometry to WKT string for CSV
+            edges_subset["geometry_wkt"] = edges_subset["geometry"].apply(
+                lambda g: g.wkt if g is not None else ""
+            )
+
+            # Drop geometry column (can't save to CSV directly)
+            edges_subset = edges_subset.drop(columns=["geometry"])
+
+            # Reset index to get u, v, key as columns
+            edges_subset = edges_subset.reset_index()
+
+            edges_subset.to_csv(self.edges_path, index=False)
+            logger.info(f"Edges CSV saved: {self.edges_path}")
+
+        except Exception as e:
+            logger.warning(f"Could not save edges CSV: {e}")
+
+    def load_cached_network(self) -> nx.MultiDiGraph:
+        """
+        Load network from cached GraphML file.
+
+        Returns:
+            NetworkX MultiDiGraph
+        """
+        logger.info(f"Loading cached network from {self.graphml_path}...")
+        start_time = time.time()
+
+        graph = ox.load_graphml(self.graphml_path)
+
+        elapsed = time.time() - start_time
+        logger.info(
+            f"Network loaded in {elapsed:.1f}s: "
+            f"{len(graph.nodes):,} nodes, "
+            f"{len(graph.edges):,} edges"
+        )
+        return graph
+
+    # ─────────────────────────────────────────
+    # MAIN ENTRY POINT
+    # ─────────────────────────────────────────
+
+    def get_or_download_network(self) -> nx.MultiDiGraph:
+        """
+        Main entry point: load from cache or download.
+
+        Returns:
+            NetworkX MultiDiGraph of road network
+        """
+        if self.is_cache_valid():
+            graph = self.load_cached_network()
+        else:
+            graph = self.download_network()
+            self.cache_network(graph)
+
+        self._graph = graph
+        return graph
+
+    # ─────────────────────────────────────────
+    # GEODATAFRAMES
+    # ─────────────────────────────────────────
+
+    def get_edges_gdf(self) -> gpd.GeoDataFrame:
+        """
+        Get road edges as GeoDataFrame.
+
+        Returns:
+            GeoDataFrame with road segment geometries
+        """
+        if self._graph is None:
+            self.get_or_download_network()
+
+        if self._edges_gdf is None:
+            logger.info("Converting graph to GeoDataFrame...")
+            self._nodes_gdf, self._edges_gdf = ox.graph_to_gdfs(self._graph)
+            logger.info(
+                f"GeoDataFrame ready: " f"{len(self._edges_gdf):,} road segments"
+            )
+
+        return self._edges_gdf
+
+    def get_nodes_gdf(self) -> gpd.GeoDataFrame:
+        """
+        Get road nodes as GeoDataFrame.
+
+        Returns:
+            GeoDataFrame with road node geometries
+        """
+        if self._graph is None:
+            self.get_or_download_network()
+
+        if self._nodes_gdf is None:
+            self._nodes_gdf, self._edges_gdf = ox.graph_to_gdfs(self._graph)
+
+        return self._nodes_gdf
+
+    def get_metadata(self) -> dict:
+        """
+        Get metadata about the loaded network.
+
+        Returns:
+            Dict with network statistics
+        """
+        if os.path.exists(self.metadata_path):
+            with open(self.metadata_path, "r") as f:
+                return json.load(f)
+
+        if self._graph is not None:
+            return {
+                "city_key": self.city_key,
+                "city_name": self.city_name,
+                "total_nodes": len(self._graph.nodes),
+                "total_edges": len(self._graph.edges),
+            }
+
+        return {
+            "city_key": self.city_key,
+            "city_name": self.city_name,
+            "status": "not_loaded",
+        }
+
+    def get_network_stats(self) -> dict:
+        """
+        Get detailed statistics about the road network.
+
+        Returns:
+            Dict with network statistics
+        """
+        edges_gdf = self.get_edges_gdf()
+
+        stats = {
+            "total_segments": len(edges_gdf),
+            "total_length_km": round(edges_gdf["length"].sum() / 1000, 2),
+            "avg_segment_length_m": round(edges_gdf["length"].mean(), 2),
+        }
+
+        # Road type distribution
+        if "highway" in edges_gdf.columns:
+            highway_counts = {}
+            for val in edges_gdf["highway"]:
+                if isinstance(val, list):
+                    key = val[0] if val else "unknown"
+                else:
+                    key = str(val) if pd.notna(val) else "unknown"
+                highway_counts[key] = highway_counts.get(key, 0) + 1
+            stats["road_type_distribution"] = highway_counts
+
+        return stats
+
+========== backend/ml/scenario_simulator.py ==========
+# backend/ml/scenario_simulator.py
+
+import os
+import json
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional
+
+import pandas as pd
+import numpy as np
+
+from config import (
+    DIGITAL_TWIN_DIR,
+    INTERVENTIONS,
+    VALUE_OF_STATISTICAL_LIFE_INR,
+    BASELINE_FATALITIES_PER_HIGH_RISK_SEGMENT,
+)
+
+# ─────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class ScenarioSimulator:
+    """
+    Simulate "what-if" scenarios for road segments.
+
+    Capabilities:
+    1. Weather change simulation
+    2. Time of day change simulation
+    3. Traffic level change simulation
+    4. Safety intervention simulation
+    5. Multi-factor scenario comparison
+    """
+
+    def __init__(self, predictor, segment_risks: dict,
+                 city_key: str = "delhi"):
+        """
+        Initialize scenario simulator.
+
+        Args:
+            predictor: AccidentPredictor instance for ML predictions
+            segment_risks: Dict from SegmentRiskCalculator
+            city_key: City identifier
+        """
+        self.predictor = predictor
+        self.segment_risks = segment_risks
+        self.city_key = city_key
+
+        # Output paths
+        self.output_dir = os.path.join(DIGITAL_TWIN_DIR, city_key)
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        self.scenarios_path = os.path.join(
+            self.output_dir, "simulated_scenarios.json"
+        )
+
+        # Simulation results storage
+        self.simulated_scenarios = {}
+
+        logger.info(
+            f"ScenarioSimulator initialized for {city_key}: "
+            f"{len(segment_risks):,} segments"
+        )
+
+    # ─────────────────────────────────────────
+    # BASE INPUT GENERATION
+    # ─────────────────────────────────────────
+
+    def _create_base_input(self, segment_id: str) -> dict:
+        """
+        Create base prediction input for a segment.
+
+        Uses typical/average conditions.
+
+        Args:
+            segment_id: Segment identifier
+
+        Returns:
+            Dict matching predictor input schema
+        """
+        segment_data = self.segment_risks.get(segment_id, {})
+
+        # Default base input (typical conditions)
+        base_input = {
+            "Day_of_Week": "Monday",
+            "Time_of_Accident": "12:00",
+            "Accident_Location": segment_data.get("road_name", "Unknown"),
+            "Nature_of_Accident": "Collision",
+            "Causes_D1": "Other",
+            "Road_Condition": "Dry",
+            "Weather_Conditions": "Clear",
+            "Intersection_Type": "No Junction",
+            "Vehicle_Type_V1": "Car/Jeep/Van",
+            "Vehicle_Type_V2": "",
+            "Number_of_Vehicles": 2,
+        }
+
+        return base_input
+
+    # ─────────────────────────────────────────
+    # SCENARIO MODIFICATIONS
+    # ─────────────────────────────────────────
+
+    def _modify_weather(self, base_input: dict,
+                         weather: str) -> dict:
+        """
+        Modify weather conditions in input.
+
+        Args:
+            base_input: Base prediction input
+            weather: Weather condition
+                     ("Clear", "Rain", "Fog", "Snow", etc.)
+
+        Returns:
+            Modified input dict
+        """
+        modified = base_input.copy()
+        modified["Weather_Conditions"] = weather
+
+        # Also modify road condition based on weather
+        if weather == "Rain":
+            modified["Road_Condition"] = "Wet"
+        elif weather == "Snow":
+            modified["Road_Condition"] = "Snow/Ice"
+        elif weather == "Dust Storm":
+            modified["Road_Condition"] = "Dusty"
+        else:
+            modified["Road_Condition"] = "Dry"
+
+        return modified
+
+    def _modify_time(self, base_input: dict, time_period: str) -> dict:
+        """
+        Modify time of day in input.
+
+        Args:
+            base_input: Base prediction input
+            time_period: Time period
+                         ("Morning", "Day", "Evening", "Night")
+
+        Returns:
+            Modified input dict
+        """
+        modified = base_input.copy()
+
+        time_map = {
+            "Morning": "08:00",
+            "Day": "14:00",
+            "Afternoon": "14:00",
+            "Evening": "18:00",
+            "Night": "23:00",
+        }
+
+        modified["Time_of_Accident"] = time_map.get(
+            time_period, "12:00"
+        )
+
+        return modified
+
+    def _modify_traffic(self, base_input: dict,
+                         traffic_level: str) -> dict:
+        """
+        Modify traffic level in input.
+
+        Args:
+            base_input: Base prediction input
+            traffic_level: Traffic level
+                           ("Low", "Medium", "High")
+
+        Returns:
+            Modified input dict
+        """
+        modified = base_input.copy()
+
+        # Traffic level affects number of vehicles
+        traffic_map = {
+            "Low": 1,
+            "Medium": 2,
+            "High": 3,
+        }
+
+        modified["Number_of_Vehicles"] = traffic_map.get(
+            traffic_level, 2
+        )
+
+        return modified
+
+    def _apply_intervention(self, base_input: dict,
+                             intervention_id: str,
+                             base_risk: float) -> tuple:
+        """
+        Apply safety intervention effect.
+
+        Interventions modify risk by a percentage
+        based on their expected effectiveness.
+
+        Args:
+            base_input: Base prediction input
+            intervention_id: Intervention identifier
+            base_risk: Base risk score before intervention
+
+        Returns:
+            (modified_input, adjusted_risk) tuple
+        """
+        if intervention_id not in INTERVENTIONS:
+            logger.warning(
+                f"Unknown intervention: {intervention_id}"
+            )
+            return base_input, base_risk
+
+        intervention = INTERVENTIONS[intervention_id]
+
+        # Get expected risk reduction range
+        min_reduction = intervention["expected_risk_reduction_min"]
+        max_reduction = intervention["expected_risk_reduction_max"]
+
+        # Use average reduction
+        avg_reduction_pct = (min_reduction + max_reduction) / 2
+
+        # Calculate new risk
+        reduction_factor = (100 - avg_reduction_pct) / 100
+        new_risk = base_risk * reduction_factor
+
+        # For interventions, we don't modify input features
+        # (since ML model wasn't trained with intervention features)
+        # Instead, we apply the reduction directly to risk score
+        modified = base_input.copy()
+
+        return modified, new_risk
+
+    # ─────────────────────────────────────────
+    # SIMULATION EXECUTION
+    # ─────────────────────────────────────────
+
+    def _predict_risk(self, input_dict: dict) -> float:
+        """
+        Get risk score from ML prediction or rule-based fallback.
+        """
+        if self.predictor is None:
+            return self._rule_based_risk(input_dict)
+
+        try:
+            result = self.predictor.predict(input_dict)
+            probabilities = result.get("probabilities", {})
+
+            weighted_risk = (
+                probabilities.get("Fatal", 0) * 100 +
+                probabilities.get("Grievous", 0) * 75 +
+                probabilities.get("Minor", 0) * 50 +
+                probabilities.get("No Injury", 0) * 25
+            )
+            return round(weighted_risk, 2)
+
+        except Exception as e:
+            logger.warning(f"ML prediction failed, using rules: {e}")
+            return self._rule_based_risk(input_dict)
+
+    def _rule_based_risk(self, input_dict: dict) -> float:
+        """
+        Rule-based risk scoring when ML predictor unavailable.
+        Based on known road safety risk factors.
+        """
+        risk = 40.0
+
+        # Weather effect
+        weather = input_dict.get("Weather_Conditions", "Clear")
+        weather_risk = {
+            "Clear": 0, "Cloudy": 3, "Rain": 15,
+            "Heavy Rain": 22, "Fog": 20, "Dense Fog": 28,
+            "Snow": 18, "Dust Storm": 12, "Hail": 16,
+        }
+        risk += weather_risk.get(weather, 0)
+
+        # Road condition effect
+        road = input_dict.get("Road_Condition", "Dry")
+        road_risk = {
+            "Dry": 0, "Wet": 12, "Snow/Ice": 20,
+            "Potholed": 15, "Muddy": 10,
+            "Dusty": 8, "Under Construction": 18,
+        }
+        risk += road_risk.get(road, 0)
+
+        # Time of day effect
+        time_str = input_dict.get("Time_of_Accident", "12:00")
+        try:
+            hour = int(time_str.split(":")[0])
+        except Exception:
+            hour = 12
+
+        if 22 <= hour or hour < 6:
+            risk += 18    # Late night
+        elif 6 <= hour < 9:
+            risk += 8     # Morning rush
+        elif 17 <= hour < 20:
+            risk += 10    # Evening rush
+        else:
+            risk += 0     # Daytime base
+
+        # Traffic effect
+        vehicles = input_dict.get("Number_of_Vehicles", 2)
+        if vehicles >= 3:
+            risk += 10
+        elif vehicles == 1:
+            risk -= 5
+
+        # Weekend effect
+        day = input_dict.get("Day_of_Week", "Monday")
+        if day in {"Saturday", "Sunday"}:
+            risk += 5
+
+        return round(max(0.0, min(100.0, risk)), 2)
+  
+  
+  
+  
+    def simulate_weather_change(self, segment_id: str,
+                                 weather: str) -> dict:
+        """Simulate weather change on a segment."""
+        segment_data = self.segment_risks.get(segment_id, {})
+        historical_risk = segment_data.get("composite_risk", 0.0)
+
+        base_input = self._create_base_input(segment_id)
+        base_ml_risk = self._rule_based_risk(base_input)
+
+        modified_input = self._modify_weather(base_input, weather)
+        new_ml_risk = self._rule_based_risk(modified_input)
+
+        ml_risk_change = new_ml_risk - base_ml_risk
+
+        # Use historical risk as base, apply ML-derived change
+        base_risk = historical_risk if historical_risk > 0 else base_ml_risk
+        new_risk = max(0.0, min(100.0, base_risk + ml_risk_change))
+
+        risk_change = new_risk - base_risk
+        risk_change_pct = (
+            (risk_change / base_risk * 100) if base_risk > 0 else 0
+        )
+
+        return {
+            "scenario_type": "weather_change",
+            "segment_id": segment_id,
+            "base_weather": base_input["Weather_Conditions"],
+            "new_weather": weather,
+            "base_risk": round(base_risk, 2),
+            "new_risk": round(new_risk, 2),
+            "risk_change": round(risk_change, 2),
+            "risk_change_pct": round(risk_change_pct, 2),
+            "note": "Risk change based on weather impact model",
+        }
+
+    def simulate_time_change(self, segment_id: str,
+                              time_period: str) -> dict:
+        """Simulate time of day change on a segment."""
+        segment_data = self.segment_risks.get(segment_id, {})
+        historical_risk = segment_data.get("composite_risk", 0.0)
+
+        base_input = self._create_base_input(segment_id)
+        base_ml_risk = self._rule_based_risk(base_input)
+
+        modified_input = self._modify_time(base_input, time_period)
+        new_ml_risk = self._rule_based_risk(modified_input)
+
+        ml_risk_change = new_ml_risk - base_ml_risk
+
+        base_risk = historical_risk if historical_risk > 0 else base_ml_risk
+        new_risk = max(0.0, min(100.0, base_risk + ml_risk_change))
+
+        risk_change = new_risk - base_risk
+        risk_change_pct = (
+            (risk_change / base_risk * 100) if base_risk > 0 else 0
+        )
+
+        return {
+            "scenario_type": "time_change",
+            "segment_id": segment_id,
+            "base_time": base_input["Time_of_Accident"],
+            "new_time_period": time_period,
+            "base_risk": round(base_risk, 2),
+            "new_risk": round(new_risk, 2),
+            "risk_change": round(risk_change, 2),
+            "risk_change_pct": round(risk_change_pct, 2),
+            "note": "Risk change based on time-of-day impact model",
+        }
+
+    def simulate_traffic_change(self, segment_id: str,
+                                 traffic_level: str) -> dict:
+        """Simulate traffic level change on a segment."""
+        segment_data = self.segment_risks.get(segment_id, {})
+        historical_risk = segment_data.get("composite_risk", 0.0)
+
+        base_input = self._create_base_input(segment_id)
+        base_ml_risk = self._rule_based_risk(base_input)
+
+        modified_input = self._modify_traffic(base_input, traffic_level)
+        new_ml_risk = self._rule_based_risk(modified_input)
+
+        ml_risk_change = new_ml_risk - base_ml_risk
+
+        base_risk = historical_risk if historical_risk > 0 else base_ml_risk
+        new_risk = max(0.0, min(100.0, base_risk + ml_risk_change))
+
+        risk_change = new_risk - base_risk
+        risk_change_pct = (
+            (risk_change / base_risk * 100) if base_risk > 0 else 0
+        )
+
+        return {
+            "scenario_type": "traffic_change",
+            "segment_id": segment_id,
+            "base_traffic": "Medium",
+            "new_traffic": traffic_level,
+            "base_risk": round(base_risk, 2),
+            "new_risk": round(new_risk, 2),
+            "risk_change": round(risk_change, 2),
+            "risk_change_pct": round(risk_change_pct, 2),
+            "note": "Risk change based on traffic impact model",
+        }
+
+
+
+    def simulate_intervention(self, segment_id: str,
+                               intervention_id: str) -> dict:
+        """
+        Simulate safety intervention on a segment.
+
+        Args:
+            segment_id: Segment identifier
+            intervention_id: Intervention to simulate
+
+        Returns:
+            Simulation result dict with ROI analysis
+        """
+        if intervention_id not in INTERVENTIONS:
+            raise ValueError(
+                f"Unknown intervention: {intervention_id}. "
+                f"Available: {list(INTERVENTIONS.keys())}"
+            )
+
+        intervention = INTERVENTIONS[intervention_id]
+
+        # Get base risk from segment data
+        segment_data = self.segment_risks.get(segment_id, {})
+        base_risk = segment_data.get("composite_risk", 50.0)
+
+        # Apply intervention
+        base_input = self._create_base_input(segment_id)
+        _, new_risk = self._apply_intervention(
+            base_input, intervention_id, base_risk
+        )
+
+        # Calculate risk reduction
+        risk_reduction = base_risk - new_risk
+        risk_reduction_pct = (
+            (risk_reduction / base_risk * 100) if base_risk > 0 else 0
+        )
+
+        # Estimate lives saved per year
+        # Assumes high-risk segments have baseline fatalities per year
+        if base_risk >= 60:  # High risk
+            baseline_fatalities = BASELINE_FATALITIES_PER_HIGH_RISK_SEGMENT
+        else:
+            baseline_fatalities = BASELINE_FATALITIES_PER_HIGH_RISK_SEGMENT * (base_risk / 60)
+
+        lives_saved_per_year = baseline_fatalities * (risk_reduction_pct / 100)
+
+        # Calculate cost
+        segment_length_km = segment_data.get("length_m", 100) / 1000
+        total_cost = intervention["cost_per_km_inr"] * segment_length_km
+
+        # ROI calculation
+        cost_per_life_saved = (
+            total_cost / lives_saved_per_year
+            if lives_saved_per_year > 0 else 0
+        )
+
+        # ROI in years (how many years to break even
+        # if each life saved = VALUE_OF_STATISTICAL_LIFE_INR)
+        value_saved_per_year = lives_saved_per_year * VALUE_OF_STATISTICAL_LIFE_INR
+        roi_years = (
+            total_cost / value_saved_per_year
+            if value_saved_per_year > 0 else 999
+        )
+
+        # Recommendation
+        if risk_reduction_pct >= 25 and roi_years <= 3:
+            recommendation = "HIGHLY RECOMMENDED"
+        elif risk_reduction_pct >= 15 and roi_years <= 5:
+            recommendation = "RECOMMENDED"
+        elif risk_reduction_pct >= 10 and roi_years <= 10:
+            recommendation = "CONSIDER"
+        else:
+            recommendation = "NOT RECOMMENDED"
+
+        return {
+            "scenario_type": "intervention",
+            "segment_id": segment_id,
+            "intervention_id": intervention_id,
+            "intervention_name": intervention["name"],
+            "intervention_description": intervention["description"],
+            "base_risk": base_risk,
+            "new_risk": new_risk,
+            "risk_reduction": round(risk_reduction, 2),
+            "risk_reduction_pct": round(risk_reduction_pct, 2),
+            "lives_saved_per_year": round(lives_saved_per_year, 2),
+            "segment_length_km": round(segment_length_km, 3),
+            "cost_total_inr": round(total_cost, 2),
+            "cost_per_km_inr": intervention["cost_per_km_inr"],
+            "cost_per_life_saved_inr": round(cost_per_life_saved, 2),
+            "roi_years": round(roi_years, 2),
+            "value_saved_per_year_inr": round(value_saved_per_year, 2),
+            "implementation_months": intervention["implementation_months"],
+            "primary_benefit": intervention["primary_benefit"],
+            "recommendation": recommendation,
+        }
+
+    # ─────────────────────────────────────────
+    # MULTI-SCENARIO COMPARISON
+    # ─────────────────────────────────────────
+
+    def compare_interventions(self, segment_id: str,
+                               intervention_ids: List[str]) -> dict:
+        """
+        Compare multiple interventions for a segment.
+
+        Args:
+            segment_id: Segment identifier
+            intervention_ids: List of intervention IDs to compare
+
+        Returns:
+            Comparison result dict with sorted interventions
+        """
+        results = []
+
+        for intervention_id in intervention_ids:
+            try:
+                result = self.simulate_intervention(
+                    segment_id, intervention_id
+                )
+                results.append(result)
+            except Exception as e:
+                logger.warning(
+                    f"Intervention {intervention_id} failed: {e}"
+                )
+                continue
+
+        # Sort by risk reduction percentage (descending)
+        results_sorted = sorted(
+            results,
+            key=lambda x: x["risk_reduction_pct"],
+            reverse=True
+        )
+
+        # Best intervention
+        best = results_sorted[0] if results_sorted else None
+
+        return {
+            "segment_id": segment_id,
+            "interventions_compared": len(results),
+            "results": results_sorted,
+            "best_intervention": best["intervention_id"] if best else None,
+            "best_risk_reduction_pct": best["risk_reduction_pct"] if best else 0,
+        }
+
+    def simulate_combined_scenario(self, segment_id: str,
+                                     weather: Optional[str] = None,
+                                     time_period: Optional[str] = None,
+                                     traffic_level: Optional[str] = None) -> dict:
+        """
+        Simulate combined multi-factor scenario.
+
+        Args:
+            segment_id: Segment identifier
+            weather: Weather condition (optional)
+            time_period: Time period (optional)
+            traffic_level: Traffic level (optional)
+
+        Returns:
+            Simulation result dict
+        """
+        base_input = self._create_base_input(segment_id)
+        base_risk = self._predict_risk(base_input)
+
+        modified_input = base_input.copy()
+
+        # Apply modifications
+        if weather:
+            modified_input = self._modify_weather(modified_input, weather)
+        if time_period:
+            modified_input = self._modify_time(modified_input, time_period)
+        if traffic_level:
+            modified_input = self._modify_traffic(modified_input, traffic_level)
+
+        new_risk = self._predict_risk(modified_input)
+
+        risk_change = new_risk - base_risk
+        risk_change_pct = (
+            (risk_change / base_risk * 100) if base_risk > 0 else 0
+        )
+
+        return {
+            "scenario_type": "combined",
+            "segment_id": segment_id,
+            "weather": weather or base_input["Weather_Conditions"],
+            "time_period": time_period or "Day",
+            "traffic_level": traffic_level or "Medium",
+            "base_risk": base_risk,
+            "new_risk": new_risk,
+            "risk_change": round(risk_change, 2),
+            "risk_change_pct": round(risk_change_pct, 2),
+            "description": self._generate_scenario_description(
+                weather, time_period, traffic_level
+            ),
+        }
+
+    def _generate_scenario_description(self, weather, time_period,
+                                         traffic_level) -> str:
+        """Generate human-readable scenario description."""
+        parts = []
+        if weather:
+            parts.append(f"{weather} weather")
+        if time_period:
+            parts.append(f"during {time_period.lower()}")
+        if traffic_level:
+            parts.append(f"with {traffic_level.lower()} traffic")
+
+        if not parts:
+            return "Base conditions"
+
+        return "Scenario: " + ", ".join(parts)
+
+    # ─────────────────────────────────────────
+    # BATCH ANALYSIS
+    # ─────────────────────────────────────────
+
+    def analyze_top_segments(self, intervention_id: str,
+                              n: int = 10) -> dict:
+        """
+        Analyze intervention impact on top N dangerous segments.
+
+        Args:
+            intervention_id: Intervention to analyze
+            n: Number of top segments to analyze
+
+        Returns:
+            Batch analysis result dict
+        """
+        # Get top dangerous segments
+        sorted_segments = sorted(
+            self.segment_risks.values(),
+            key=lambda x: x["composite_risk"],
+            reverse=True
+        )[:n]
+
+        results = []
+        total_risk_reduction = 0
+        total_lives_saved = 0
+        total_cost = 0
+
+        for segment in sorted_segments:
+            segment_id = segment["segment_id"]
+
+            try:
+                result = self.simulate_intervention(
+                    segment_id, intervention_id
+                )
+                results.append(result)
+
+                total_risk_reduction += result["risk_reduction_pct"]
+                total_lives_saved += result["lives_saved_per_year"]
+                total_cost += result["cost_total_inr"]
+
+            except Exception as e:
+                logger.warning(
+                    f"Analysis failed for {segment_id}: {e}"
+                )
+                continue
+
+        avg_risk_reduction = (
+            total_risk_reduction / len(results) if results else 0
+        )
+
+        total_value_saved_per_year = total_lives_saved * VALUE_OF_STATISTICAL_LIFE_INR
+        overall_roi_years = (
+            total_cost / total_value_saved_per_year
+            if total_value_saved_per_year > 0 else 999
+        )
+
+        return {
+            "intervention_id": intervention_id,
+            "intervention_name": INTERVENTIONS[intervention_id]["name"],
+            "segments_analyzed": len(results),
+            "total_risk_reduction_pct": round(total_risk_reduction, 2),
+            "avg_risk_reduction_pct": round(avg_risk_reduction, 2),
+            "total_lives_saved_per_year": round(total_lives_saved, 2),
+            "total_cost_inr": round(total_cost, 2),
+            "total_value_saved_per_year_inr": round(total_value_saved_per_year, 2),
+            "overall_roi_years": round(overall_roi_years, 2),
+            "cost_per_life_saved_inr": round(
+                total_cost / total_lives_saved if total_lives_saved > 0 else 0,
+                2
+            ),
+            "segments": results,
+        }
+
+    # ─────────────────────────────────────────
+    # SAVE / LOAD
+    # ─────────────────────────────────────────
+
+    def save_scenarios(self, scenarios: dict = None):
+        """Save simulated scenarios to JSON."""
+        if scenarios is None:
+            scenarios = self.simulated_scenarios
+
+        with open(self.scenarios_path, "w") as f:
+            json.dump(scenarios, f, indent=2)
+
+        logger.info(f"Scenarios saved: {self.scenarios_path}")
+
+    def load_scenarios(self) -> dict:
+        """Load simulated scenarios from JSON."""
+        if not os.path.exists(self.scenarios_path):
+            return {}
+
+        with open(self.scenarios_path, "r") as f:
+            scenarios = json.load(f)
+
+        self.simulated_scenarios = scenarios
+        return scenarios
+
+========== backend/ml/preprocessor.py ==========
+import pandas as pd
+import numpy as np
+import os
+import json
+import joblib
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from config import OUTPUTS_DIR, MODELS_DIR, RANDOM_STATE
+
+
+def extract_time_features(df, roles):
+    """Extract temporal features from time and date columns."""
+    time_cols = roles.get("time_columns", [])
+    date_cols = roles.get("date_columns", [])
+
+    for col in time_cols:
+        if col in df.columns:
+            try:
+                time_series = df[col].astype(str).str.strip()
+                parsed_time = pd.to_datetime(
+                    time_series, format="%H:%M", errors="coerce"
+                )
+                if parsed_time.isna().all():
+                    parsed_time = pd.to_datetime(time_series, errors="coerce")
+
+                df["Hour"] = parsed_time.dt.hour.fillna(12).astype(int)
+                df["Time_Period"] = pd.cut(
+                    df["Hour"],
+                    bins=[-1, 6, 12, 17, 21, 24],
+                    labels=["Night", "Morning", "Afternoon", "Evening", "Night_Late"],
+                ).astype(str)
+                df["Time_Period"] = df["Time_Period"].replace("Night_Late", "Night")
+                df["Is_Night"] = ((df["Hour"] >= 21) | (df["Hour"] < 6)).astype(int)
+                print(f"  [INFO] Extracted Hour, Time_Period, Is_Night from '{col}'")
+                break
+            except Exception as e:
+                print(f"  [WARNING] Could not parse time column '{col}': {e}")
+
+    for col in date_cols:
+        if col in df.columns:
+            try:
+                parsed_date = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+                if parsed_date.notna().sum() > len(df) * 0.3:
+                    df["Month"] = parsed_date.dt.month.fillna(1).astype(int)
+                    df["Year"] = parsed_date.dt.year.fillna(2020).astype(int)
+                    df["Quarter"] = parsed_date.dt.quarter.fillna(1).astype(int)
+                    df["DayOfMonth"] = parsed_date.dt.day.fillna(15).astype(int)
+                    print(
+                        f"  [INFO] Extracted Month, Year, Quarter, DayOfMonth from '{col}'"
+                    )
+                    break
+            except Exception as e:
+                print(f"  [WARNING] Could not parse date column '{col}': {e}")
+
+    day_col = None
+    for col in df.columns:
+        if "day" in col.lower() and "week" in col.lower():
+            day_col = col
+            break
+        elif col.lower() in ["day", "day_of_week", "dayofweek"]:
+            day_col = col
+            break
+
+    if day_col and day_col in df.columns:
+        day_map = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        if df[day_col].dtype == "object":
+            df["DayOfWeek_Num"] = (
+                df[day_col].str.lower().str.strip().map(day_map).fillna(0).astype(int)
+            )
+        else:
+            df["DayOfWeek_Num"] = df[day_col].fillna(0).astype(int)
+
+        df["Is_Weekend"] = (df["DayOfWeek_Num"] >= 5).astype(int)
+        print(f"  [INFO] Extracted DayOfWeek_Num, Is_Weekend from '{day_col}'")
+
+    return df
+
+
+def create_interaction_features(df, roles):
+    """Create interaction features from weather and road columns."""
+    weather_cols = roles.get("weather_columns", [])
+    road_cols = roles.get("road_columns", [])
+
+    weather_col = weather_cols[0] if weather_cols else None
+    road_col = road_cols[0] if road_cols else None
+
+    if (
+        weather_col
+        and road_col
+        and weather_col in df.columns
+        and road_col in df.columns
+    ):
+        df["Weather_Road_Interaction"] = (
+            df[weather_col].astype(str).str.strip()
+            + "_"
+            + df[road_col].astype(str).str.strip()
+        )
+        print(
+            f"  [INFO] Created Weather_Road_Interaction from '{weather_col}' + '{road_col}'"
+        )
+
+    if "Time_Period" in df.columns:
+        location_cols = roles.get("location_columns", [])
+        loc_col = location_cols[0] if location_cols else None
+        if loc_col and loc_col in df.columns:
+            df["Time_Location_Interaction"] = (
+                df["Time_Period"].astype(str)
+                + "_"
+                + df[loc_col].astype(str).str.strip()
+            )
+            print(f"  [INFO] Created Time_Location_Interaction")
+
+    return df
+
+
+def handle_missing_values(df):
+    """Impute missing values: median for numeric, mode for categorical."""
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    for col in numeric_cols:
+        if df[col].isnull().sum() > 0:
+            median_val = df[col].median()
+            df[col] = df[col].fillna(median_val)
+
+    for col in categorical_cols:
+        if df[col].isnull().sum() > 0:
+            mode_val = df[col].mode()
+            if len(mode_val) > 0:
+                df[col] = df[col].fillna(mode_val[0])
+            else:
+                df[col] = df[col].fillna("Unknown")
+
+    remaining_missing = df.isnull().sum().sum()
+    print(f"  [INFO] Missing values after imputation: {remaining_missing}")
+    return df
+
+
+def encode_features(df, target_col):
+    """Encode categorical features: one-hot for low cardinality, frequency for high."""
+    categorical_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    if target_col in categorical_cols:
+        categorical_cols.remove(target_col)
+
+    low_cardinality = []
+    high_cardinality = []
+
+    for col in categorical_cols:
+        n_unique = df[col].nunique()
+        if n_unique <= 15:
+            low_cardinality.append(col)
+        else:
+            high_cardinality.append(col)
+
+    print(f"  [INFO] Low cardinality columns (one-hot, <=15 unique): {low_cardinality}")
+    print(
+        f"  [INFO] High cardinality columns (frequency encode, >15 unique): {high_cardinality}"
+    )
+
+    for col in high_cardinality:
+        freq_map = df[col].value_counts(normalize=True).to_dict()
+        df[col + "_freq"] = df[col].map(freq_map).fillna(0.0)
+        df.drop(col, axis=1, inplace=True)
+
+    if low_cardinality:
+        df = pd.get_dummies(df, columns=low_cardinality, drop_first=True, dtype=int)
+        print(f"  [INFO] One-hot encoded {len(low_cardinality)} columns")
+
+    return df
+
+
+def encode_target(df, target_col):
+    """Encode the target variable to numeric labels."""
+    le = LabelEncoder()
+    original_classes = df[target_col].unique().tolist()
+
+    df[target_col] = le.fit_transform(df[target_col].astype(str))
+
+    label_mapping = dict(zip(le.transform(le.classes_), le.classes_))
+    print(f"  [INFO] Target encoding: {label_mapping}")
+
+    joblib.dump(le, os.path.join(MODELS_DIR, "label_encoder.joblib"))
+    print(f"  [SAVED] Label encoder → {MODELS_DIR}/label_encoder.joblib")
+
+    return df, le, label_mapping
+
+
+def scale_features(X_train, X_test, feature_names):
+    """Standard scale numeric features."""
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    joblib.dump(scaler, os.path.join(MODELS_DIR, "scaler.joblib"))
+    print(f"  [SAVED] Scaler → {MODELS_DIR}/scaler.joblib")
+
+    return X_train_scaled, X_test_scaled, scaler
+
+
+def preprocess_dataset(df, target_col, roles, dataset_key="primary"):
+    """Full preprocessing pipeline for a single dataset."""
+    print(f"\n{'='*60}")
+    print(f"  Preprocessing: {dataset_key}")
+    print(f"{'='*60}")
+    print(f"  Initial shape: {df.shape}")
+
+    df = df.copy()
+
+    leak_cols = roles.get("leak_columns", [])
+    if leak_cols:
+        existing_leak = [c for c in leak_cols if c in df.columns]
+        if existing_leak:
+            df.drop(columns=existing_leak, inplace=True)
+            print(f"  [INFO] Dropped leak columns: {existing_leak}")
+
+    cols_to_drop = []
+    for col in df.columns:
+        if col == target_col:
+            continue
+        if df[col].nunique() <= 1:
+            cols_to_drop.append(col)
+        elif df[col].nunique() == len(df):
+            if df[col].dtype == "object":
+                cols_to_drop.append(col)
+
+    if cols_to_drop:
+        df.drop(columns=cols_to_drop, inplace=True)
+        print(f"  [INFO] Dropped constant/unique-ID columns: {cols_to_drop}")
+
+    date_cols_to_drop = []
+    for col in roles.get("date_columns", []):
+        if col in df.columns:
+            date_cols_to_drop.append(col)
+
+    time_cols_to_drop = []
+    for col in roles.get("time_columns", []):
+        if col in df.columns:
+            time_cols_to_drop.append(col)
+
+    df = extract_time_features(df, roles)
+    df = create_interaction_features(df, roles)
+
+    for col in date_cols_to_drop:
+        if col in df.columns:
+            df.drop(col, axis=1, inplace=True)
+            print(f"  [INFO] Dropped raw date column: {col}")
+
+    for col in time_cols_to_drop:
+        if col in df.columns:
+            df.drop(col, axis=1, inplace=True)
+            print(f"  [INFO] Dropped raw time column: {col}")
+
+    df = handle_missing_values(df)
+
+    df, label_encoder, label_mapping = encode_target(df, target_col)
+
+    df = encode_features(df, target_col)
+
+    remaining_object_cols = df.select_dtypes(
+        include=["object", "category"]
+    ).columns.tolist()
+    if target_col in remaining_object_cols:
+        remaining_object_cols.remove(target_col)
+    if remaining_object_cols:
+        df.drop(columns=remaining_object_cols, inplace=True)
+        print(
+            f"  [INFO] Dropped remaining non-numeric columns: {remaining_object_cols}"
+        )
+
+    feature_names = [c for c in df.columns if c != target_col]
+    X = df[feature_names].values
+    y = df[target_col].values
+
+    print(f"\n  Final feature matrix shape: {X.shape}")
+    print(f"  Target shape: {y.shape}")
+    print(
+        f"  Feature names ({len(feature_names)}): {feature_names[:20]}{'...' if len(feature_names) > 20 else ''}"
+    )
+    print(
+        f"  Class distribution after encoding: {pd.Series(y).value_counts().to_dict()}"
+    )
+
+    feature_info = {
+        "feature_names": feature_names,
+        "label_mapping": {str(k): str(v) for k, v in label_mapping.items()},
+        "n_features": len(feature_names),
+        "n_classes": len(label_mapping),
+    }
+
+    feature_info_path = os.path.join(MODELS_DIR, f"feature_info_{dataset_key}.json")
+    with open(feature_info_path, "w") as f:
+        json.dump(feature_info, f, indent=2)
+    print(f"  [SAVED] Feature info → {feature_info_path}")
+
+    return X, y, feature_names, label_encoder, label_mapping
+
+========== backend/ml/trainer.py ==========
+"""
+Model Training Pipeline — orchestrates all 5 models.
+Each model lives in its own file under ml/models/.
+This file handles: split → SMOTE → call each model trainer → collect results.
+"""
+
+import numpy as np
+import time
+import json
+import os
+import joblib
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from imblearn.combine import SMOTETomek
+from config import RANDOM_STATE, TEST_SIZE, MODELS_DIR
+from ml.models import MODEL_TRAINERS
+
+
+def apply_smote(X_train, y_train):
+    """Apply SMOTE to handle class imbalance on training data only."""
+    print(f"\n  [SMOTE] Class distribution BEFORE SMOTE:")
+    unique, counts = np.unique(y_train, return_counts=True)
+    for cls, cnt in zip(unique, counts):
+        print(f"    Class {cls}: {cnt} samples")
+
+    min_class_count = min(counts)
+    k_neighbors = 5 if min_class_count >= 6 else max(1, min_class_count - 1)
+
+    try:
+        smote = SMOTE(random_state=RANDOM_STATE, k_neighbors=k_neighbors)
+        X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+
+        print(f"\n  [SMOTE] Class distribution AFTER SMOTE:")
+        unique_r, counts_r = np.unique(y_resampled, return_counts=True)
+        for cls, cnt in zip(unique_r, counts_r):
+            print(f"    Class {cls}: {cnt} samples")
+
+        print(f"  [SMOTE] Training set size: {len(X_train)} → {len(X_resampled)}")
+        return X_resampled, y_resampled, "SMOTE"
+
+    except Exception as e:
+        print(f"  [WARNING] SMOTE failed: {e}. Trying SMOTETomek...")
+        try:
+            smote_tomek = SMOTETomek(random_state=RANDOM_STATE)
+            X_resampled, y_resampled = smote_tomek.fit_resample(X_train, y_train)
+            print(f"  [SMOTETomek] Applied successfully. New size: {len(X_resampled)}")
+            return X_resampled, y_resampled, "SMOTETomek"
+        except Exception as e2:
+            print(f"  [ERROR] SMOTETomek also failed: {e2}. Using original data.")
+            return X_train, y_train, "None"
+
+
+def split_data(X, y):
+    """Split data into train and test sets with stratification."""
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=TEST_SIZE, stratify=y, random_state=RANDOM_STATE
+    )
+    print(f"\n  [SPLIT] Train: {X_train.shape}, Test: {X_test.shape}")
+    return X_train, X_test, y_train, y_test
+
+
+def train_all_models(X, y, feature_names, label_mapping, dataset_key="primary"):
+    """
+    Full training pipeline:
+        1. Split data (80/20 stratified)
+        2. Scale features
+        3. Apply SMOTE on training set
+        4. Train each of the 5 models using their dedicated files
+        5. Collect and return all results
+
+    Args:
+        X: Full feature matrix
+        y: Full target array
+        feature_names: List of feature column names
+        label_mapping: Dict mapping encoded labels to class names
+        dataset_key: Identifier for the dataset being used
+
+    Returns:
+        results: Dict of model_name → result dict (includes model, metrics, etc.)
+        X_train_scaled: Scaled training features
+        X_test_scaled: Scaled test features
+        y_train: Original training labels (before SMOTE)
+        y_test: Test labels
+        X_train_smote: SMOTE-resampled training features
+        y_train_smote: SMOTE-resampled training labels
+    """
+    print(f"\n{'='*60}")
+    print(f"  TRAINING PIPELINE: {dataset_key}")
+    print(f"  Models: {list(MODEL_TRAINERS.keys())}")
+    print(f"{'='*60}")
+
+    # --- Step 1: Split ---
+    X_train, X_test, y_train, y_test = split_data(X, y)
+
+    # --- Step 2: Scale ---
+    from ml.preprocessor import scale_features
+
+    X_train_scaled, X_test_scaled, scaler = scale_features(
+        X_train, X_test, feature_names
+    )
+
+    # --- Step 3: SMOTE ---
+    X_train_smote, y_train_smote, smote_method = apply_smote(X_train_scaled, y_train)
+
+    # --- Step 4: Train each model ---
+    results = {}
+    save_dir = os.path.join(MODELS_DIR, dataset_key)
+    os.makedirs(save_dir, exist_ok=True)
+
+    for model_name, train_fn in MODEL_TRAINERS.items():
+        print(f"\n  {'#'*50}")
+        print(f"  Starting: {model_name}")
+        print(f"  {'#'*50}")
+
+        try:
+            result = train_fn(
+                X_train=X_train_smote,
+                y_train=y_train_smote,
+                X_test=X_test_scaled,
+                y_test=y_test,
+                feature_names=feature_names,
+                label_mapping=label_mapping,
+                save_dir=save_dir,
+            )
+            results[model_name] = result
+            print(f"  [OK] {model_name} — F1(W): {result['f1_weighted']:.4f}")
+
+        except Exception as e:
+            print(f"  [ERROR] {model_name} training failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+            results[model_name] = {
+                "model_name": model_name,
+                "model": None,
+                "error": str(e),
+                "training_time": 0,
+                "cv_scores": [],
+                "cv_mean": 0.0,
+                "cv_std": 0.0,
+                "accuracy": 0.0,
+                "precision_weighted": 0.0,
+                "recall_weighted": 0.0,
+                "f1_weighted": 0.0,
+                "f1_macro": 0.0,
+                "roc_auc": 0.0,
+                "cohens_kappa": 0.0,
+                "mcc": 0.0,
+                "log_loss": 0.0,
+                "confusion_matrix": [],
+                "normalized_confusion_matrix": [],
+                "roc_data": {},
+                "class_labels": [],
+                "feature_importances": [],
+            }
+
+    # --- Step 5: Summary ---
+    successful = {k: v for k, v in results.items() if v.get("model") is not None}
+    failed = {k: v for k, v in results.items() if v.get("model") is None}
+
+    print(f"\n  {'='*50}")
+    print(f"  TRAINING SUMMARY")
+    print(f"  {'='*50}")
+    print(f"  Models trained successfully: {len(successful)}/{len(results)}")
+
+    if successful:
+        best = max(successful.values(), key=lambda x: x.get("f1_weighted", 0))
+        print(f"  Best model: {best['model_name']} (F1-W: {best['f1_weighted']:.4f})")
+
+    if failed:
+        print(f"  Failed models: {list(failed.keys())}")
+        for name, res in failed.items():
+            print(f"    {name}: {res.get('error', 'Unknown error')}")
+
+    # --- Save training summary ---
+    training_summary = {
+        "dataset": dataset_key,
+        "smote_method": smote_method,
+        "train_size_original": int(X_train_scaled.shape[0]),
+        "train_size_after_smote": int(X_train_smote.shape[0]),
+        "test_size": int(X_test_scaled.shape[0]),
+        "n_features": int(X_train_scaled.shape[1]),
+        "models_trained": list(successful.keys()),
+        "models_failed": list(failed.keys()),
+        "best_model": best["model_name"] if successful else None,
+        "best_f1_weighted": best["f1_weighted"] if successful else 0.0,
+    }
+
+    summary_path = os.path.join(MODELS_DIR, f"training_summary_{dataset_key}.json")
+    with open(summary_path, "w") as f:
+        json.dump(training_summary, f, indent=2, default=str)
+    print(f"\n  [SAVED] Training summary → {summary_path}")
+
+    return (
+        results,
+        X_train_scaled,
+        X_test_scaled,
+        y_train,
+        y_test,
+        X_train_smote,
+        y_train_smote,
+    )
+
+========== backend/ml/evaluator.py ==========
+import numpy as np
+import pandas as pd
+import json
+import os
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tabulate import tabulate
+from config import OUTPUTS_DIR, PLOTS_DIR
+
+
+def evaluate_all_models(results, X_test, y_test, label_mapping, dataset_key="primary"):
+    """
+    Collect metrics from all trained models and generate comparison table.
+    Each model's train function already computed metrics, so we just aggregate.
+    """
+    print(f"\n{'='*60}")
+    print(f"  Collecting Evaluation Results: {dataset_key}")
+    print(f"{'='*60}")
+
+    all_metrics = []
+
+    for model_name, result in results.items():
+        if result.get("model") is None:
+            print(f"  [SKIP] {model_name} — training failed")
+            continue
+
+        metrics = {
+            "model_name": result["model_name"],
+            "accuracy": result["accuracy"],
+            "precision_weighted": result["precision_weighted"],
+            "recall_weighted": result["recall_weighted"],
+            "f1_weighted": result["f1_weighted"],
+            "f1_macro": result["f1_macro"],
+            "roc_auc": result["roc_auc"],
+            "cohens_kappa": result["cohens_kappa"],
+            "mcc": result["mcc"],
+            "log_loss": result["log_loss"],
+            "cv_mean": result["cv_mean"],
+            "cv_std": result["cv_std"],
+            "training_time": result["training_time"],
+            "confusion_matrix": result["confusion_matrix"],
+            "normalized_confusion_matrix": result["normalized_confusion_matrix"],
+            "roc_data": result["roc_data"],
+            "class_labels": result["class_labels"],
+        }
+
+        all_metrics.append(metrics)
+        print(
+            f"  {model_name}: Acc={metrics['accuracy']:.4f} | F1w={metrics['f1_weighted']:.4f} | AUC={metrics['roc_auc']:.4f}"
+        )
+
+    if not all_metrics:
+        print("  [ERROR] No models to evaluate!")
+        return []
+
+    best = max(all_metrics, key=lambda x: x["f1_weighted"])
+    print(
+        f"\n  ★ Best Model: {best['model_name']} (F1-weighted: {best['f1_weighted']:.4f})"
+    )
+
+    comparison = {
+        "models": all_metrics,
+        "best_model": best["model_name"],
+        "best_metric": "f1_weighted",
+        "best_value": best["f1_weighted"],
+        "dataset": dataset_key,
+    }
+
+    comparison_path = os.path.join(OUTPUTS_DIR, "model_comparison.json")
+    with open(comparison_path, "w") as f:
+        json.dump(comparison, f, indent=2, default=str)
+    print(f"  [SAVED] Model comparison → {comparison_path}")
+
+    csv_path = os.path.join(OUTPUTS_DIR, "model_comparison.csv")
+    df_metrics = pd.DataFrame(
+        [
+            {
+                "Model": m["model_name"],
+                "Accuracy": m["accuracy"],
+                "Precision(W)": m["precision_weighted"],
+                "Recall(W)": m["recall_weighted"],
+                "F1(W)": m["f1_weighted"],
+                "F1(M)": m["f1_macro"],
+                "AUC": m["roc_auc"],
+                "Kappa": m["cohens_kappa"],
+                "MCC": m["mcc"],
+                "LogLoss": m["log_loss"],
+                "CV Mean±Std": f"{m['cv_mean']:.4f}±{m['cv_std']:.4f}",
+                "Time(s)": m["training_time"],
+            }
+            for m in all_metrics
+        ]
+    )
+    df_metrics.to_csv(csv_path, index=False)
+    print(f"  [SAVED] Comparison CSV → {csv_path}")
+
+    print(f"\n{tabulate(df_metrics, headers='keys', tablefmt='grid', showindex=False)}")
+
+    return all_metrics
+
+
+def generate_evaluation_plots(
+    all_metrics, results, X_test, y_test, label_mapping, dataset_key="primary"
+):
+    """Generate and save all evaluation visualization plots."""
+    print(f"\n  Generating evaluation plots...")
+
+    plt.style.use("dark_background")
+    colors = [
+        "#2563EB",
+        "#EF4444",
+        "#10B981",
+        "#F59E0B",
+        "#8B5CF6",
+        "#F97316",
+        "#06B6D4",
+    ]
+
+    model_names = [m["model_name"] for m in all_metrics]
+    accuracies = [m["accuracy"] for m in all_metrics]
+    f1_weighted = [m["f1_weighted"] for m in all_metrics]
+    f1_macro = [m["f1_macro"] for m in all_metrics]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    x = np.arange(len(model_names))
+    width = 0.25
+    bars1 = ax.bar(x - width, accuracies, width, label="Accuracy", color=colors[0])
+    bars2 = ax.bar(x, f1_weighted, width, label="F1 (Weighted)", color=colors[1])
+    bars3 = ax.bar(x + width, f1_macro, width, label="F1 (Macro)", color=colors[2])
+    ax.set_xlabel("Models")
+    ax.set_ylabel("Score")
+    ax.set_title("Model Comparison — Accuracy & F1 Scores")
+    ax.set_xticks(x)
+    ax.set_xticklabels(model_names, rotation=30, ha="right")
+    ax.legend()
+    ax.set_ylim(0, 1.1)
+    for bars in [bars1, bars2, bars3]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height + 0.01,
+                f"{height:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+            )
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(PLOTS_DIR, "model_comparison_bar.png"),
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close()
+    print(f"  [SAVED] model_comparison_bar.png")
+
+    for m in all_metrics:
+        model_name = m["model_name"]
+        cm = np.array(m["confusion_matrix"])
+        class_labels = m.get("class_labels", [str(i) for i in range(cm.shape[0])])
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=class_labels,
+            yticklabels=class_labels,
+            ax=axes[0],
+            cbar_kws={"shrink": 0.8},
+        )
+        axes[0].set_title(f"{model_name} — Confusion Matrix (Counts)")
+        axes[0].set_xlabel("Predicted")
+        axes[0].set_ylabel("Actual")
+
+        cm_norm = np.array(m["normalized_confusion_matrix"])
+        sns.heatmap(
+            cm_norm,
+            annot=True,
+            fmt=".3f",
+            cmap="Reds",
+            xticklabels=class_labels,
+            yticklabels=class_labels,
+            ax=axes[1],
+            cbar_kws={"shrink": 0.8},
+        )
+        axes[1].set_title(f"{model_name} — Normalized Confusion Matrix")
+        axes[1].set_xlabel("Predicted")
+        axes[1].set_ylabel("Actual")
+
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(PLOTS_DIR, f"confusion_matrix_{model_name}.png"),
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close()
+        print(f"  [SAVED] confusion_matrix_{model_name}.png")
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for idx, m in enumerate(all_metrics):
+        roc_data = m.get("roc_data", {})
+        for cls_name, cls_data in roc_data.items():
+            fpr = cls_data["fpr"]
+            tpr = cls_data["tpr"]
+            auc_val = cls_data["auc"]
+            ax.plot(
+                fpr,
+                tpr,
+                label=f"{m['model_name']} - {cls_name} (AUC={auc_val:.3f})",
+                alpha=0.7,
+            )
+
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Random (AUC=0.5)")
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("ROC Curves — All Models (One-vs-Rest)")
+    ax.legend(loc="lower right", fontsize=6)
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(PLOTS_DIR, "roc_curves_all.png"), dpi=150, bbox_inches="tight"
+    )
+    plt.close()
+    print(f"  [SAVED] roc_curves_all.png")
+
+    cv_data = []
+    cv_labels = []
+    for model_name, result in results.items():
+        cv_scores = result.get("cv_scores", [])
+        if cv_scores and len(cv_scores) > 1:
+            cv_data.append(cv_scores)
+            cv_labels.append(model_name)
+
+    if cv_data:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bp = ax.boxplot(cv_data, labels=cv_labels, patch_artist=True)
+        for i, patch in enumerate(bp["boxes"]):
+            patch.set_facecolor(colors[i % len(colors)])
+            patch.set_alpha(0.7)
+        ax.set_ylabel("F1 Score (Weighted)")
+        ax.set_title("Cross-Validation Score Distribution")
+        plt.xticks(rotation=30, ha="right")
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(PLOTS_DIR, "cv_boxplot.png"), dpi=150, bbox_inches="tight"
+        )
+        plt.close()
+        print(f"  [SAVED] cv_boxplot.png")
+
+    tree_models = ["RandomForest", "XGBoost", "GradientBoosting"]
+    for model_name in tree_models:
+        result = results.get(model_name)
+        if result and result.get("feature_importances"):
+            fi_list = result["feature_importances"]
+            top_n = min(20, len(fi_list))
+            names = [fi["name"] for fi in fi_list[:top_n]]
+            values = [fi["importance"] for fi in fi_list[:top_n]]
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+            ax.barh(range(top_n), values[::-1], color=colors[0], alpha=0.8)
+            ax.set_yticks(range(top_n))
+            ax.set_yticklabels(names[::-1], fontsize=8)
+            ax.set_xlabel("Feature Importance")
+            ax.set_title(f"{model_name} — Top {top_n} Feature Importances")
+            plt.tight_layout()
+            plt.savefig(
+                os.path.join(PLOTS_DIR, f"feature_importance_{model_name}.png"),
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close()
+            print(f"  [SAVED] feature_importance_{model_name}.png")
+
+    training_times = [m["training_time"] for m in all_metrics]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    sorted_idx = np.argsort(training_times)[::-1]
+    sorted_names = [model_names[i] for i in sorted_idx]
+    sorted_times = [training_times[i] for i in sorted_idx]
+    ax.barh(sorted_names, sorted_times, color=colors[3], alpha=0.8)
+    ax.set_xlabel("Training Time (seconds)")
+    ax.set_title("Model Training Time Comparison")
+    for i, v in enumerate(sorted_times):
+        ax.text(v + 0.1, i, f"{v:.2f}s", va="center", fontsize=9)
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(PLOTS_DIR, "training_time_comparison.png"),
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close()
+    print(f"  [SAVED] training_time_comparison.png")
+
+    print(f"  [DONE] All evaluation plots saved to {PLOTS_DIR}")
+
+========== backend/requirements.txt ==========
+fastapi==0.104.1
+uvicorn==0.24.0
+pandas==2.1.4
+numpy==1.26.2
+scikit-learn==1.3.2
+xgboost==2.0.3
+lightgbm==4.2.0
+imbalanced-learn==0.11.0
+shap==0.44.0
+matplotlib==3.8.2
+seaborn==0.13.0
+joblib==1.3.2
+python-multipart==0.0.6
+aiofiles==23.2.1
+tabulate==0.9.0
+pydantic==2.5.2
+sqlalchemy==2.0.23
+osmnx==1.7.1
+folium==0.15.1
+geopandas==0.14.1
+geopy==2.4.1
+shapely==2.0.2
+rtree==1.1.0

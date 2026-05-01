@@ -1,0 +1,1119 @@
+========== frontend/src/api/apiClient.js ==========
+import axios from 'axios';
+
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+const apiClient = axios.create({
+  baseURL: API_BASE,
+  timeout: 120000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('API Error:', error.response?.data || error.message);
+    return Promise.reject(error);
+  }
+);
+
+export const api = {
+  // Health
+  health: () => apiClient.get('/api/health'),
+
+  // EDA
+  edaSummary: () => apiClient.get('/api/eda/summary'),
+  edaChart: (chartName, datasetKey = 'primary') =>
+    apiClient.get(`/api/eda/charts/${chartName}`, { params: { dataset_key: datasetKey } }),
+
+  // Models
+  modelComparison: () => apiClient.get('/api/models/comparison'),
+  modelConfusionMatrix: (modelName) => apiClient.get(`/api/models/${modelName}/confusion-matrix`),
+  modelROC: (modelName) => apiClient.get(`/api/models/${modelName}/roc-data`),
+  modelMetrics: (modelName) => apiClient.get(`/api/models/${modelName}/metrics`),
+  bestModel: () => apiClient.get('/api/models/best'),
+
+  // SHAP
+  shapFeatureImportance: (modelName = null) =>
+    modelName
+      ? apiClient.get(`/api/shap/feature-importance/${modelName}`)
+      : apiClient.get('/api/shap/feature-importance'),
+  shapSummaryPlot: (modelName = null, datasetKey = 'primary') =>
+    apiClient.get('/api/shap/summary-plot', { params: { model_name: modelName, dataset_key: datasetKey } }),
+  shapBarPlot: (modelName, datasetKey = 'primary') =>
+    apiClient.get(`/api/shap/bar-plot/${modelName}`, { params: { dataset_key: datasetKey } }),
+  shapAllModels: (datasetKey = 'primary') =>
+    apiClient.get('/api/shap/all-models', { params: { dataset_key: datasetKey } }),
+
+  // Predict
+  predict: (data) => apiClient.post('/api/predict', data),
+  predictBatch: (file, modelName = 'XGBoost') => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post(`/api/predict/batch?model_name=${modelName}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  availableModels: () => apiClient.get('/api/predict/models'),
+
+  // Data
+  datasetsInfo: () => apiClient.get('/api/datasets/info'),
+  filterOptions: () => apiClient.get('/api/filters/options'),
+  dataPreview: (datasetKey = 'primary', page = 1, perPage = 25) =>
+    apiClient.get(`/api/data/preview/${datasetKey}`, { params: { page, per_page: perPage } }),
+
+  // ============================================
+  // DIGITAL TWIN API
+  // ============================================
+
+  twinCities: () => apiClient.get('/api/twin/cities'),
+
+  twinInitialize: (cityKey, forceRebuild = false) =>
+    apiClient.get(`/api/twin/${cityKey}/initialize`, {
+      params: { force_rebuild: forceRebuild },
+      timeout: 600000,
+    }),
+
+  twinMetadata: (cityKey) => apiClient.get(`/api/twin/${cityKey}/metadata`),
+
+  twinHeatmap: (cityKey, type = 'segments', riskThreshold = 0) =>
+    apiClient.get(`/api/twin/${cityKey}/heatmap`, {
+      params: { type, risk_threshold: riskThreshold },
+    }),
+
+  // FIXED: removed min_risk default so backend uses its own default (60)
+  // Pass explicit 0 only when you want ALL segments
+  twinTopDangerous: (cityKey, limit = 15, minRisk = 0) =>
+    apiClient.get(`/api/twin/${cityKey}/segments/top-dangerous`, {
+      params: { limit, min_risk: minRisk },
+    }),
+
+  twinSegmentDetails: (cityKey, segmentId) =>
+    apiClient.get(`/api/twin/${cityKey}/segment/${segmentId}`),
+
+  twinStats: (cityKey) => apiClient.get(`/api/twin/${cityKey}/stats`),
+
+  twinSimulate: (cityKey, segmentId, scenarioType, params = {}) =>
+    apiClient.post(
+      `/api/twin/${cityKey}/segment/${segmentId}/simulate`,
+      null,
+      {
+        params: {
+          scenario_type: scenarioType,
+          ...params,
+        },
+      }
+    ),
+
+  twinRefresh: (cityKey) => apiClient.post(`/api/twin/${cityKey}/refresh`),
+};
+
+export default apiClient;
+
+========== frontend/src/App.js ==========
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import Layout from './components/layout/Layout';
+import OverviewPage    from './pages/OverviewPage';
+import ModelsPage      from './pages/ModelsPage';
+import FeaturesPage    from './pages/FeaturesPage';
+import PredictPage     from './pages/PredictPage';
+import DataPage        from './pages/DataPage';
+import DigitalTwinPage from './pages/DigitalTwinPage';
+import SimulationPage  from './pages/SimulationPage';
+
+function App() {
+  return (
+    <Router>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: '#1F2940',
+            color: '#FFFFFF',
+            border: '1px solid #2D3748',
+            borderRadius: '12px',
+            fontSize: '14px',
+          },
+          success: { iconTheme: { primary: '#10B981', secondary: '#1F2940' } },
+          error:   { iconTheme: { primary: '#EF4444', secondary: '#1F2940' } },
+        }}
+      />
+      <Layout>
+        <Routes>
+          <Route path="/"              element={<OverviewPage />}    />
+          <Route path="/models"        element={<ModelsPage />}      />
+          <Route path="/features"      element={<FeaturesPage />}    />
+          <Route path="/predict"       element={<PredictPage />}     />
+          <Route path="/data"          element={<DataPage />}        />
+          <Route path="/digital-twin"  element={<DigitalTwinPage />} />
+          <Route path="/simulation"    element={<SimulationPage />}  />
+        </Routes>
+      </Layout>
+    </Router>
+  );
+}
+
+export default App;
+
+========== frontend/src/pages/OverviewPage.jsx ==========
+import React, { useState, useEffect } from 'react';
+import { FiAlertTriangle, FiXCircle, FiCheckCircle, FiTrendingUp } from 'react-icons/fi';
+import { api } from '../api/apiClient';
+import KPICard from '../components/common/KPICard';
+import ChartTile from '../components/common/ChartTile';
+import FilterBar from '../components/common/FilterBar';
+import DonutChart from '../components/charts/DonutChart';
+import AreaTimeChart from '../components/charts/AreaTimeChart';
+import HorizontalBarChart from '../components/charts/HorizontalBarChart';
+import GroupedBarChart from '../components/charts/GroupedBarChart';
+import LineChartComponent from '../components/charts/LineChartComponent';
+import { SkeletonCard, SkeletonChart } from '../components/common/LoadingSpinner';
+import { formatNumber } from '../utils/formatters';
+
+const OverviewPage = () => {
+  const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState(null);
+  const [charts, setCharts] = useState({});
+  const [bestModel, setBestModel] = useState(null);
+  const [shapTop, setShapTop] = useState(null);
+  const [datasetKey, setDatasetKey] = useState('primary');
+  const [filters, setFilters] = useState({});
+
+  useEffect(() => {
+    const fetchAll = async () => {
+      setLoading(true);
+      try {
+        const [summaryRes, bestRes, shapRes] = await Promise.allSettled([
+          api.edaSummary(),
+          api.bestModel(),
+          api.shapFeatureImportance(),
+        ]);
+
+        if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value.data);
+        if (bestRes.status === 'fulfilled') setBestModel(bestRes.value.data);
+        if (shapRes.status === 'fulfilled') setShapTop(shapRes.value.data);
+
+        const chartNames = ['class_distribution', 'accidents_by_hour', 'severity_by_cause', 'accidents_by_weather', 'monthly_trend', 'accidents_by_vehicle'];
+        const chartResults = await Promise.allSettled(
+          chartNames.map((name) => api.edaChart(name, datasetKey))
+        );
+
+        const chartsObj = {};
+        chartNames.forEach((name, i) => {
+          if (chartResults[i].status === 'fulfilled') {
+            chartsObj[name] = chartResults[i].value.data;
+          }
+        });
+        setCharts(chartsObj);
+      } catch (err) {
+        console.error('Failed to fetch overview data:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAll();
+  }, [datasetKey]);
+
+  const ds = summary?.[datasetKey] || summary?.primary || {};
+  const totalRecords = ds.total_records || 0;
+  const classDist = ds.class_distribution || {};
+  const fatalCount = classDist['Fatal'] || classDist['fatal'] || Object.values(classDist)[0] || 0;
+  const fatalPct = totalRecords > 0 ? ((fatalCount / totalRecords) * 100).toFixed(1) : 0;
+
+  const filterConfig = [
+    { key: 'dataset', label: 'Dataset', options: ['primary', 'secondary'] },
+  ];
+
+  const handleFilterChange = (key, value) => {
+    if (key === 'dataset' && value) setDatasetKey(value);
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+          {[...Array(4)].map((_, i) => <SkeletonCard key={i} />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {[...Array(4)].map((_, i) => <SkeletonChart key={i} />)}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* KPI Row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        <KPICard icon={<FiAlertTriangle />} value={formatNumber(totalRecords)} label="Total Accidents" subtext={ds.name || ''} color="#F97316" delay={0} />
+        <KPICard icon={<FiXCircle />} value={formatNumber(fatalCount)} label="Fatal Accidents" subtext={`${fatalPct}% of total`} color="#EF4444" delay={0.1} />
+        <KPICard icon={<FiCheckCircle />} value={bestModel ? `${(bestModel.best_value * 100).toFixed(1)}%` : '—'} label="Best Model F1" subtext={bestModel?.best_model || ''} color="#10B981" delay={0.2} />
+        <KPICard icon={<FiTrendingUp />} value={shapTop?.features?.[0]?.name || '—'} label="#1 Risk Factor" subtext={shapTop?.features?.[0] ? `SHAP: ${shapTop.features[0].importance.toFixed(4)}` : ''} color="#8B5CF6" delay={0.3} />
+      </div>
+
+      {/* Filters */}
+      <FilterBar filters={filterConfig} values={filters} onChange={handleFilterChange} onReset={() => { setFilters({}); setDatasetKey('primary'); }} />
+
+      {/* Main Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <ChartTile title="Severity Distribution" delay={0.1}>
+          <DonutChart data={charts.class_distribution} />
+        </ChartTile>
+        <ChartTile title="Accidents by Time of Day" delay={0.2}>
+          <AreaTimeChart data={charts.accidents_by_hour} />
+        </ChartTile>
+        <ChartTile title="Top Accident Causes by Severity" delay={0.3}>
+          <HorizontalBarChart data={charts.severity_by_cause} />
+        </ChartTile>
+        <ChartTile title="Weather Impact on Severity" delay={0.4}>
+          <GroupedBarChart data={charts.accidents_by_weather} />
+        </ChartTile>
+      </div>
+
+      {/* Bottom Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <ChartTile title="Monthly Accident Trend" delay={0.5}>
+          <LineChartComponent data={charts.monthly_trend} />
+        </ChartTile>
+        <ChartTile title="Vehicle Type Distribution" delay={0.6}>
+          <DonutChart data={charts.accidents_by_vehicle} />
+        </ChartTile>
+      </div>
+    </div>
+  );
+};
+
+export default OverviewPage;
+
+========== frontend/src/pages/DigitalTwinPage.jsx ==========
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { MapContainer, TileLayer, Polyline, Popup, useMap } from 'react-leaflet';
+import { motion } from 'framer-motion';
+import {
+  FiMap, FiRefreshCw, FiAlertTriangle,
+  FiActivity, FiInfo, FiFilter
+} from 'react-icons/fi';
+import toast from 'react-hot-toast';
+
+import { api } from '../api/apiClient';
+import { CITY_CENTERS } from '../utils/constants';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import KPICard from '../components/common/KPICard';
+import CitySelector from '../components/digital_twin/CitySelector';
+import StatisticsPanel from '../components/digital_twin/StatisticsPanel';
+import TopDangerousList from '../components/digital_twin/TopDangerousList';
+import SegmentDetailPanel from '../components/digital_twin/SegmentDetailPanel';
+import RiskLegend from '../components/digital_twin/RiskLegend';
+
+// ─── Performance cap ───────────────────────────────────────────────────────────
+const MAX_MAP_SEGMENTS = 500;
+
+// ─── Use backend color directly, fallback to calculated ───────────────────────
+const getSegmentColor = (seg) => {
+  // Use risk_score for colors visible on LIGHT map background
+  const score = seg.risk_score ?? 0;
+  if (score >= 60) return '#DC2626';  // red - high risk
+  if (score >= 40) return '#EA580C';  // orange - moderate
+  if (score >= 20) return '#D97706';  // amber - low-moderate
+  if (score > 0)   return '#16A34A';  // green - low risk
+  return '#6B7280';                   // gray - no data
+};
+
+const getSegmentWeight = (seg) => {
+  // Backend provides weight field directly - use it!
+  if (seg.weight) return Math.min(seg.weight, 5);
+  const score = seg.risk_score ?? 0;
+  if (score >= 80) return 5;
+  if (score >= 60) return 4;
+  if (score >= 40) return 3;
+  return 2;
+};
+
+// ─── Map recenter ──────────────────────────────────────────────────────────────
+const MapRecenter = ({ center, zoom }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (center && map) {
+      try { map.setView([center.lat, center.lng], zoom || 12); }
+      catch (e) { /* ignore */ }
+    }
+  }, [center, zoom, map]);
+  return null;
+};
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+const DigitalTwinPage = () => {
+  const [cities,           setCities]           = useState([]);
+  const [selectedCity,     setSelectedCity]     = useState(null);
+  const [initializingCity, setInitializingCity] = useState(null);
+  const [segments,         setSegments]         = useState([]);
+  const [topDangerous,     setTopDangerous]     = useState([]);
+  const [stats,            setStats]            = useState(null);
+  const [metadata,         setMetadata]         = useState(null);
+  const [selectedSegment,  setSelectedSegment]  = useState(null);
+  const [detailSegment,    setDetailSegment]    = useState(null);
+  const [loading,          setLoading]          = useState(false);
+  const [mapLoading,       setMapLoading]       = useState(false);
+  // Default filter: show HIGH risk only (60+) for performance
+  const [riskFilter,       setRiskFilter]       = useState(60);
+  const [sidebarTab,       setSidebarTab]       = useState('stats');
+  const [mapKey,           setMapKey]           = useState('map-initial');
+  const [mapReady,         setMapReady]         = useState(false);
+
+  // ── load cities ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const fetchCities = async () => {
+      try {
+        const res = await api.twinCities();
+        const cityList = res.data?.cities || [];
+        setCities(cityList);
+        const ready = cityList.find((c) => c.status === 'ready');
+        if (ready) {
+          setSelectedCity(ready.key);
+          loadCityData(ready.key);
+        }
+      } catch (err) {
+        toast.error('Failed to load cities');
+        console.error(err);
+      }
+    };
+    fetchCities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── load city data ───────────────────────────────────────────────────────────
+  const loadCityData = useCallback(async (cityKey) => {
+    if (!cityKey) return;
+    setMapLoading(true);
+    setMapReady(false);
+    setSegments([]);
+    setTopDangerous([]);
+    setStats(null);
+    setMetadata(null);
+    setDetailSegment(null);
+    setSelectedSegment(null);
+
+    try {
+      const [heatmapRes, statsRes, topRes] = await Promise.allSettled([
+        api.twinHeatmap(cityKey, 'segments', 0),
+        api.twinStats(cityKey),
+        api.twinTopDangerous(cityKey, 15, 0),
+      ]);
+
+      if (heatmapRes.status === 'fulfilled') {
+        const allSegs = heatmapRes.value.data?.data || [];
+        // Sort by risk_score descending so highest risk renders first/on top
+        const sorted = [...allSegs].sort(
+          (a, b) => (b.risk_score ?? 0) - (a.risk_score ?? 0)
+        );
+        setSegments(sorted);
+        console.log(`Loaded ${sorted.length} segments for ${cityKey}`);
+        console.log('Sample segment:', sorted[0]);
+      }
+      if (statsRes.status === 'fulfilled') {
+        const d = statsRes.value.data;
+        setStats(d.stats);
+        setMetadata(d.stats?.metadata);
+      }
+      if (topRes.status === 'fulfilled') {
+        setTopDangerous(topRes.value.data?.segments || []);
+      }
+    } catch (err) {
+      toast.error('Failed to load city data');
+      console.error(err);
+    } finally {
+      setMapLoading(false);
+      setTimeout(() => setMapReady(true), 300);
+    }
+  }, []);
+
+  // ── initialize twin ──────────────────────────────────────────────────────────
+  const handleInitialize = useCallback(async (cityKey) => {
+    setInitializingCity(cityKey);
+    toast('Building digital twin... this may take 2-5 minutes.', { icon: '⏳', duration: 8000 });
+    try {
+      const res = await api.twinInitialize(cityKey, false);
+      if (res.data?.status === 'success') {
+        toast.success(`Digital twin for ${cityKey} is ready!`);
+        const citiesRes = await api.twinCities();
+        setCities(citiesRes.data?.cities || []);
+        setSelectedCity(cityKey);
+        setMapKey(`map-${cityKey}-${Date.now()}`);
+        await loadCityData(cityKey);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Initialization failed');
+    } finally {
+      setInitializingCity(null);
+    }
+  }, [loadCityData]);
+
+  // ── select city ──────────────────────────────────────────────────────────────
+  const handleCitySelect = useCallback((cityKey) => {
+    if (cityKey === selectedCity) return;
+    setSelectedCity(cityKey);
+    setSelectedSegment(null);
+    setDetailSegment(null);
+    setSidebarTab('stats');
+    setMapReady(false);
+    setMapKey(`map-${cityKey}-${Date.now()}`);
+    loadCityData(cityKey);
+  }, [loadCityData, selectedCity]);
+
+  // ── segment detail ───────────────────────────────────────────────────────────
+  const fetchSegmentDetail = useCallback(async (seg) => {
+    setSelectedSegment(seg.segment_id);
+    setSidebarTab('detail');
+    if (selectedCity) {
+      try {
+        const res = await api.twinSegmentDetails(selectedCity, seg.segment_id);
+        setDetailSegment(res.data?.segment || seg);
+      } catch {
+        setDetailSegment(seg);
+      }
+    } else {
+      setDetailSegment(seg);
+    }
+  }, [selectedCity]);
+
+  // ── refresh ──────────────────────────────────────────────────────────────────
+  const handleRefresh = useCallback(async () => {
+    if (!selectedCity) return;
+    setLoading(true);
+    try {
+      await api.twinRefresh(selectedCity);
+      toast.success('Twin refreshed!');
+      setMapKey(`map-${selectedCity}-${Date.now()}`);
+      await loadCityData(selectedCity);
+    } catch {
+      toast.error('Refresh failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedCity, loadCityData]);
+
+  // ── filtered + capped segments for map ───────────────────────────────────────
+  const filteredSegments = useMemo(() => {
+    const filtered = segments.filter((s) => (s.risk_score ?? 0) >= riskFilter);
+    // Always include selected segment
+    if (selectedSegment) {
+      const sel = segments.find((s) => s.segment_id === selectedSegment);
+      if (sel && !filtered.find((s) => s.segment_id === sel.segment_id)) {
+        return [sel, ...filtered].slice(0, MAX_MAP_SEGMENTS);
+      }
+    }
+    return filtered.slice(0, MAX_MAP_SEGMENTS);
+  }, [segments, riskFilter, selectedSegment]);
+
+  const totalFiltered = useMemo(
+    () => segments.filter((s) => (s.risk_score ?? 0) >= riskFilter).length,
+    [segments, riskFilter]
+  );
+
+  // city center from backend data
+  const cityConfig   = cities.find((c) => c.key === selectedCity);
+  const cityCenter   = cityConfig?.center
+    ? { lat: cityConfig.center[0], lng: cityConfig.center[1] }
+    : CITY_CENTERS.delhi;
+  const cityZoom     = cityConfig?.zoom_level || 12;
+
+  // KPIs
+  const riskStats    = stats?.risk_statistics    || {};
+  const networkStats = stats?.network_statistics  || {};
+  const accStats     = stats?.accident_statistics || {};
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-between flex-wrap gap-3"
+      >
+        <div>
+          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            <FiMap className="text-pbi-blue" />
+            Digital Twin — Road Network
+          </h1>
+          <p className="text-sm text-pbi-muted mt-0.5">
+            Virtual copy of road networks with real-time risk simulation
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedCity && (
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium
+                         bg-pbi-bg2 border border-pbi-border text-pbi-text2 hover:text-white
+                         transition-all duration-200 disabled:opacity-50"
+            >
+              <FiRefreshCw className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          )}
+        </div>
+      </motion.div>
+
+      {/* KPI Row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard icon={<FiMap />}          value={networkStats.total_edges?.toLocaleString() ?? segments.length.toLocaleString() ?? '—'} label="Road Segments"    color="#2563EB" delay={0}    />
+        <KPICard icon={<FiAlertTriangle />} value={accStats.total_accidents?.toLocaleString() ?? '—'}                                    label="Total Accidents"  color="#EF4444" delay={0.05} />
+        <KPICard icon={<FiActivity />}      value={riskStats.mean_risk != null ? `${riskStats.mean_risk.toFixed(1)}%` : '—'}             label="Avg Risk Score"   color="#F59E0B" delay={0.1}  />
+        <KPICard icon={<FiAlertTriangle />} value={riskStats.high_risk_count?.toLocaleString() ?? '—'}                                   label="High Risk Segs"   color="#EF4444" delay={0.15} subtext="Risk ≥ 75%" />
+      </div>
+
+      {/* Filter Controls */}
+      <div className="glass-card-static p-4 rounded-xl">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-pbi-muted whitespace-nowrap">
+              Show Risk ≥ <span className="text-white font-bold">{riskFilter}%</span>
+            </label>
+            <input
+              type="range" min={0} max={90} step={10}
+              value={riskFilter}
+              onChange={(e) => setRiskFilter(Number(e.target.value))}
+              className="w-28 accent-pbi-blue"
+            />
+          </div>
+
+          {/* Quick filter buttons */}
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { label: '🌐 All',      value: 0,  col: 'text-pbi-muted'   },
+              { label: '🟡 Med+ 40%', value: 40, col: 'text-pbi-yellow'  },
+              { label: '🟠 High 60%', value: 60, col: 'text-orange-400'  },
+              { label: '🔴 Very High 80%', value: 80, col: 'text-pbi-red'},
+            ].map((f) => (
+              <button
+                key={f.value}
+                onClick={() => setRiskFilter(f.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all
+                            ${riskFilter === f.value
+                              ? `${f.col} border-current bg-white/5`
+                              : 'border-pbi-border text-pbi-muted hover:text-white bg-pbi-bg2'}`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Segment count */}
+          <div className="ml-auto text-xs text-pbi-muted">
+            {segments.length > 0 ? (
+              <>
+                Rendering{' '}
+                <span className="text-white font-bold">{filteredSegments.length}</span>
+                {totalFiltered > MAX_MAP_SEGMENTS && (
+                  <span className="text-pbi-yellow"> / {MAX_MAP_SEGMENTS} cap</span>
+                )}
+                {' '}of{' '}
+                <span className="text-white font-bold">{totalFiltered}</span> matching
+                {' '}({segments.length.toLocaleString()} total)
+              </>
+            ) : (
+              <span>No segments loaded</span>
+            )}
+          </div>
+        </div>
+
+        {/* Color scale */}
+        <div className="flex items-center gap-3 mt-3 flex-wrap">
+          {[
+            { label: 'No Data',         color: '#6B7280' },
+            { label: 'Low Risk <20%',   color: '#16A34A' },
+            { label: 'Low-Mod 20-40%',  color: '#D97706' },
+            { label: 'Moderate 40-60%', color: '#EA580C' },
+            { label: 'High Risk 60%+',  color: '#DC2626' },
+          ].map((l) => (
+            <div key={l.label} className="flex items-center gap-1.5">
+              <div className="w-6 h-2 rounded-sm" style={{ backgroundColor: l.color }} />
+              <span className="text-[10px] text-pbi-text2">{l.label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Performance warning */}
+        {riskFilter === 0 && segments.length > 1000 && (
+          <p className="mt-2 text-xs text-pbi-yellow flex items-center gap-1">
+            ⚡ Showing top {MAX_MAP_SEGMENTS} of {segments.length.toLocaleString()} segments.
+            Use filters above to see specific risk levels without performance issues.
+          </p>
+        )}
+      </div>
+
+      {/* Map + Sidebar */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-5">
+
+        {/* MAP */}
+        <div className="glass-card-static rounded-xl overflow-hidden" style={{ height: 560 }}>
+          {mapLoading ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3">
+              <LoadingSpinner text="Loading road segments..." />
+              <p className="text-xs text-pbi-muted">Processing {selectedCity} network data</p>
+            </div>
+          ) : !selectedCity ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4">
+              <FiMap className="text-5xl text-pbi-muted" />
+              <p className="text-white font-semibold">Select a city to view road network</p>
+            </div>
+          ) : !mapReady ? (
+            <div className="flex items-center justify-center h-full">
+              <LoadingSpinner text="Preparing map..." />
+            </div>
+          ) : (
+            <MapContainer
+              key={mapKey}
+              center={[cityCenter.lat, cityCenter.lng]}
+              zoom={cityZoom}
+              style={{ height: '100%', width: '100%' }}
+              preferCanvas={true}
+              zoomAnimation={false}
+              markerZoomAnimation={false}
+              updateWhenZooming={false}
+              updateWhenIdle={true}
+            >
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maxZoom={19}
+              />
+              <MapRecenter center={cityCenter} zoom={cityZoom} />
+
+              {filteredSegments.map((seg, idx) => {
+                const coords = seg.coordinates;
+                // Validate coordinates exist and have at least 2 points
+                if (!coords || !Array.isArray(coords) || coords.length < 2) return null;
+                // Validate each coord is [lat, lon] numbers
+                if (!coords[0] || coords[0].length < 2) return null;
+                if (typeof coords[0][0] !== 'number' || typeof coords[0][1] !== 'number') return null;
+
+                const color      = getSegmentColor(seg);
+                const weight     = getSegmentWeight(seg);
+                const isSelected = selectedSegment === seg.segment_id;
+                const riskScore  = seg.risk_score ?? 0;
+
+                return (
+                  <Polyline
+                    key={seg.segment_id || `seg-${idx}`}
+                    positions={coords}
+                    pathOptions={{
+                      color:   isSelected ? '#60A5FA' : color,
+                      weight:  isSelected ? weight + 3 : weight,
+                      opacity: isSelected ? 1.0 : 0.85,
+                    }}
+                    eventHandlers={{
+                      click: () => fetchSegmentDetail(seg),
+                    }}
+                  >
+                    <Popup>
+                      <div style={{ minWidth: 170, fontFamily: 'sans-serif' }}>
+                        <p style={{ fontWeight: 700, fontSize: 13, margin: '0 0 3px', color: '#111' }}>
+                          {seg.road_name || seg.road_name || seg.road_name || seg.name || 'Unnamed Road'}
+                        </p>
+                        <p style={{ fontSize: 11, color: '#666', margin: '0 0 6px' }}>
+                          {seg.road_type || seg.road_category || 'Unknown type'}
+                        </p>
+                        <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 3 }}>
+                          <span style={{ fontSize: 11, color: '#666' }}>Risk Score</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: getSegmentColor(seg) }}>
+                            {riskScore.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 3 }}>
+                          <span style={{ fontSize: 11, color: '#666' }}>Category</span>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#333' }}>
+                            {seg.risk_category || '—'}
+                          </span>
+                        </div>
+                        {seg.total_accidents != null && (
+                          <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 3 }}>
+                            <span style={{ fontSize: 11, color: '#666' }}>Accidents</span>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#333' }}>
+                              {seg.total_accidents}
+                            </span>
+                          </div>
+                        )}
+                        {seg.length_m != null && (
+                          <div style={{ display:'flex', justifyContent:'space-between' }}>
+                            <span style={{ fontSize: 11, color: '#666' }}>Length</span>
+                            <span style={{ fontSize: 11, color: '#333' }}>
+                              {(seg.length_m / 1000).toFixed(2)} km
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </Popup>
+                  </Polyline>
+                );
+              })}
+            </MapContainer>
+          )}
+        </div>
+
+        {/* SIDEBAR */}
+        <div className="flex flex-col gap-4">
+          <CitySelector
+            cities={cities}
+            selectedCity={selectedCity}
+            onSelect={handleCitySelect}
+            onInitialize={handleInitialize}
+            initializingCity={initializingCity}
+          />
+
+          {selectedCity && (
+            <div className="flex gap-1 bg-pbi-bg2 rounded-lg p-1">
+              {[
+                { id: 'stats',  label: 'Stats',   icon: <FiActivity /> },
+                { id: 'top',    label: 'Top Risk', icon: <FiAlertTriangle /> },
+                { id: 'detail', label: 'Segment',  icon: <FiInfo /> },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setSidebarTab(tab.id)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2
+                              rounded-md text-xs font-medium transition-all duration-200
+                              ${sidebarTab === tab.id
+                                ? 'bg-pbi-blue text-white shadow'
+                                : 'text-pbi-muted hover:text-white'}`}
+                >
+                  {tab.icon}
+                  <span className="hidden sm:inline">{tab.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedCity && (
+            <>
+              {sidebarTab === 'stats' && (
+                <>
+                  <StatisticsPanel stats={stats} metadata={metadata} />
+                  <RiskLegend />
+                </>
+              )}
+              {sidebarTab === 'top' && (
+                <TopDangerousList
+                  segments={topDangerous}
+                  onSelectSegment={fetchSegmentDetail}
+                  selectedSegmentId={selectedSegment}
+                  loading={mapLoading}
+                />
+              )}
+              {sidebarTab === 'detail' && (
+                <SegmentDetailPanel
+                  segment={detailSegment}
+                  onClose={() => {
+                    setDetailSegment(null);
+                    setSelectedSegment(null);
+                    setSidebarTab('stats');
+                  }}
+                  onSimulate={() => {
+                    toast('Go to Simulation page to run scenarios', { icon: '🔬' });
+                  }}
+                />
+              )}
+            </>
+          )}
+
+          {!selectedCity && (
+            <div className="glass-card-static rounded-xl p-6 text-center">
+              <FiMap className="text-3xl text-pbi-muted mx-auto mb-3" />
+              <p className="text-sm text-white font-medium">Select a city to begin</p>
+              <p className="text-xs text-pbi-muted mt-1">
+                Initialize a digital twin to view the risk heatmap
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DigitalTwinPage;
+
+========== frontend/src/pages/DataPage.jsx ==========
+import React, { useState, useEffect } from 'react';
+import { FiDatabase, FiExternalLink, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import { api } from '../api/apiClient';
+import ChartTile from '../components/common/ChartTile';
+import LoadingSpinner from '../components/common/LoadingSpinner';
+import { formatNumber } from '../utils/formatters';
+
+const DataPage = () => {
+  const [datasetsInfo, setDatasetsInfo] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [selectedDataset, setSelectedDataset] = useState('primary');
+  const [page, setPage] = useState(1);
+  const perPage = 15;
+
+  useEffect(() => {
+    const fetchInfo = async () => {
+      try {
+        const res = await api.datasetsInfo();
+        setDatasetsInfo(res.data.datasets || []);
+      } catch (err) {
+        console.error('Failed to fetch dataset info:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchInfo();
+  }, []);
+
+  useEffect(() => {
+    const fetchPreview = async () => {
+      setPreviewLoading(true);
+      try {
+        const res = await api.dataPreview(selectedDataset, page, perPage);
+        setPreviewData(res.data);
+      } catch (err) {
+        console.error('Failed to fetch data preview:', err);
+      } finally {
+        setPreviewLoading(false);
+      }
+    };
+    fetchPreview();
+  }, [selectedDataset, page]);
+
+  if (loading) return <LoadingSpinner text="Loading dataset info..." />;
+
+  return (
+    <div className="space-y-6">
+      {/* Dataset Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        {datasetsInfo.map((ds, i) => (
+          <div key={i} className={`glass-card p-6 cursor-pointer ${selectedDataset === (i === 0 ? 'primary' : 'secondary') ? 'ring-2 ring-pbi-blue' : ''}`}
+            onClick={() => { setSelectedDataset(i === 0 ? 'primary' : 'secondary'); setPage(1); }}>
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-10 h-10 bg-pbi-blue/20 rounded-lg flex items-center justify-center">
+                <FiDatabase className="text-pbi-blue text-lg" />
+              </div>
+              <span className={`text-xs font-semibold px-2 py-1 rounded-full
+                               ${ds.status === 'loaded' ? 'bg-pbi-green/10 text-pbi-green' : 'bg-pbi-red/10 text-pbi-red'}`}>
+                {ds.status === 'loaded' ? '✓ Loaded' : '✗ Not Found'}
+              </span>
+            </div>
+            <h3 className="text-base font-semibold text-white mb-2">{ds.name}</h3>
+            <div className="space-y-1.5 text-xs text-pbi-text2">
+              <p><span className="text-pbi-muted">Records:</span> {formatNumber(ds.records)}</p>
+              <p><span className="text-pbi-muted">Features:</span> {ds.features}</p>
+              <p><span className="text-pbi-muted">Severity Classes:</span> {ds.severity_classes}</p>
+              <p><span className="text-pbi-muted">File:</span> {ds.filename}</p>
+            </div>
+            {ds.class_distribution && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {Object.entries(ds.class_distribution).map(([label, count]) => (
+                  <span key={label} className="text-[10px] bg-pbi-bg2 px-2 py-1 rounded border border-pbi-border text-pbi-text2">
+                    {label}: {formatNumber(count)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Data Preview */}
+      <ChartTile title="Data Preview" subtitle={`${selectedDataset} dataset — Page ${page}`}>
+        {previewLoading ? (
+          <LoadingSpinner size="sm" text="Loading data..." />
+        ) : previewData ? (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-pbi-border">
+                    {previewData.columns?.slice(0, 12).map((col) => (
+                      <th key={col} className="px-3 py-2 text-left text-pbi-muted font-medium whitespace-nowrap">{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-pbi-border/30">
+                  {previewData.records?.map((row, i) => (
+                    <tr key={i} className="hover:bg-white/[0.02]">
+                      {previewData.columns?.slice(0, 12).map((col) => (
+                        <td key={col} className="px-3 py-2 text-pbi-text2 whitespace-nowrap max-w-[150px] truncate">
+                          {String(row[col] ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            <div className="flex items-center justify-between mt-4 pt-3 border-t border-pbi-border">
+              <span className="text-xs text-pbi-muted">
+                {formatNumber(previewData.total_records)} total records
+              </span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+                  className="p-1.5 rounded text-pbi-muted hover:text-white disabled:opacity-30">
+                  <FiChevronLeft />
+                </button>
+                <span className="text-xs text-pbi-text2">{page} / {previewData.total_pages}</span>
+                <button onClick={() => setPage((p) => Math.min(previewData.total_pages, p + 1))} disabled={page === previewData.total_pages}
+                  className="p-1.5 rounded text-pbi-muted hover:text-white disabled:opacity-30">
+                  <FiChevronRight />
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <p className="text-pbi-muted text-sm">No preview available</p>
+        )}
+      </ChartTile>
+    </div>
+  );
+};
+
+export default DataPage;
+
+========== frontend/src/pages/PredictPage.jsx ==========
+import React, { useState } from 'react';
+import { api } from '../api/apiClient';
+import ChartTile from '../components/common/ChartTile';
+import PredictionForm from '../components/prediction/PredictionForm';
+import PredictionResult from '../components/prediction/PredictionResult';
+import BatchUpload from '../components/prediction/BatchUpload';
+import toast from 'react-hot-toast';
+
+const PredictPage = () => {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const handlePredict = async (formData) => {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await api.predict(formData);
+      setResult(res.data);
+      toast.success(`Predicted: ${res.data.prediction} (${(res.data.confidence * 100).toFixed(1)}% confidence)`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Prediction failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Prediction Form */}
+        <ChartTile title="Enter Accident Details" subtitle="Fill in the details to predict severity">
+          <PredictionForm onSubmit={handlePredict} loading={loading} />
+        </ChartTile>
+
+        {/* Result */}
+        <div>
+          {result ? (
+            <PredictionResult result={result} />
+          ) : (
+            <div className="glass-card-static p-8 flex flex-col items-center justify-center h-full text-center">
+              <div className="text-5xl mb-4">🎯</div>
+              <h3 className="text-lg font-semibold text-white mb-2">Ready to Predict</h3>
+              <p className="text-sm text-pbi-muted max-w-sm">
+                Fill in the accident details on the left and click "Predict Severity" to get AI-powered prediction with confidence scores.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Batch Upload */}
+      <ChartTile title="Batch Prediction" subtitle="Upload a CSV file for bulk predictions">
+        <BatchUpload />
+      </ChartTile>
+    </div>
+  );
+};
+
+export default PredictPage;
+
+========== frontend/src/components/layout/Layout.jsx ==========
+import React from 'react';
+import Sidebar from './Sidebar';
+import Header from './Header';
+
+const Layout = ({ children }) => {
+  return (
+    <div className="flex min-h-screen bg-pbi-bg">
+      <Sidebar />
+      <div className="flex-1 ml-[260px] transition-all duration-300">
+        <Header />
+        <main className="p-6">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+};
+
+export default Layout;
+
+========== frontend/package.json ==========
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^13.5.0",
+    "axios": "^1.14.0",
+    "framer-motion": "^12.38.0",
+    "leaflet": "^1.9.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-hot-toast": "^2.6.0",
+    "react-icons": "^5.6.0",
+    "react-leaflet": "^5.0.0",
+    "react-router-dom": "^7.13.2",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.8.1",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.11",
+    "autoprefixer": "^10.4.27",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^3.4.19"
+  }
+}

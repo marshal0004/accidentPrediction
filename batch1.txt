@@ -1,0 +1,1282 @@
+========== backend/api/routes_digital_twin.py ==========
+# backend/api/routes_digital_twin.py
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
+from typing import Optional, List
+from datetime import datetime
+import logging
+
+from config import CITIES_CONFIG
+from ml.digital_twin import DigitalTwin
+
+# ─────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────
+# ROUTER
+# ─────────────────────────────────────────────
+router = APIRouter(prefix="/api/twin", tags=["Digital Twin"])
+
+# ─────────────────────────────────────────────
+# GLOBAL DIGITAL TWIN REGISTRY
+# (Loaded on startup, accessed by routes)
+# ─────────────────────────────────────────────
+digital_twins = {}
+
+
+def get_twin(city_key: str) -> DigitalTwin:
+    """
+    Get digital twin instance for a city.
+    
+    Args:
+        city_key: City identifier
+        
+    Returns:
+        DigitalTwin instance
+        
+    Raises:
+        HTTPException if twin not initialized
+    """
+    if city_key not in digital_twins:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Digital twin for '{city_key}' not initialized. "
+                   f"Call /api/twin/{city_key}/initialize first."
+        )
+    return digital_twins[city_key]
+
+
+# ─────────────────────────────────────────────
+# ENDPOINTS
+# ─────────────────────────────────────────────
+
+@router.get("/cities")
+async def list_cities():
+    """
+    List all available cities with their digital twin status.
+    """
+    cities = []
+    
+    for city_key, config in CITIES_CONFIG.items():
+        status = "not_initialized"
+        metadata = {}
+        
+        if city_key in digital_twins:
+            twin = digital_twins[city_key]
+            metadata = twin.get_metadata()
+            status = metadata.get("status", "unknown")
+        
+        cities.append({
+            "key": city_key,
+            "name": config["name"],
+            "display_name": config["display_name"],
+            "center": config["center"],
+            "zoom_level": config["zoom_level"],
+            "status": status,
+            "metadata": metadata,
+        })
+    
+    return {
+        "cities": cities,
+        "total_cities": len(cities),
+    }
+
+
+@router.get("/{city_key}/initialize")
+async def initialize_twin(
+    city_key: str,
+    force_rebuild: bool = Query(False, description="Force rebuild even if cache exists")
+):
+    """
+    Initialize or rebuild digital twin for a city.
+    
+    This will:
+    1. Download road network (if needed)
+    2. Map accidents to segments
+    3. Calculate risk scores
+    4. Generate heatmaps
+    
+    First time: 5-10 minutes
+    From cache: <10 seconds
+    """
+    if city_key not in CITIES_CONFIG:
+        raise HTTPException(
+            status_code=404,
+            detail=f"City '{city_key}' not found. "
+                   f"Available: {list(CITIES_CONFIG.keys())}"
+        )
+    
+    try:
+        logger.info(f"Initializing digital twin for {city_key}...")
+        
+        # Create twin instance
+        # Try to get predictor from global scope (if loaded)
+        predictor = None
+        try:
+            from main import predictor_instance
+            predictor = predictor_instance
+            logger.info("Using ML predictor for risk calculation")
+        except ImportError:
+            logger.warning(
+                "ML predictor not available. "
+                "Risk calculation will use historical data only."
+            )
+        
+        twin = DigitalTwin(city_key, predictor=predictor)
+        
+        # Build or load
+        metadata = twin.initialize_twin(force_rebuild=force_rebuild)
+        
+        # Store in global registry
+        digital_twins[city_key] = twin
+        
+        logger.info(f"Digital twin ready for {city_key}")
+        
+        return {
+            "status": "success",
+            "city": city_key,
+            "metadata": metadata,
+            "message": "Digital twin initialized successfully",
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize twin for {city_key}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Twin initialization failed: {str(e)}"
+        )
+
+
+@router.get("/{city_key}/metadata")
+async def get_twin_metadata(city_key: str):
+    """
+    Get metadata for a digital twin.
+    """
+    twin = get_twin(city_key)
+    
+    return {
+        "city": city_key,
+        "metadata": twin.get_metadata(),
+        "stats": twin.get_stats(),
+    }
+
+
+@router.get("/{city_key}/heatmap")
+async def get_heatmap(
+    city_key: str,
+    type: str = Query("grid", description="Heatmap type: 'grid' or 'segments'"),
+    risk_threshold: float = Query(0, description="Minimum risk threshold (0-100)")
+):
+    """
+    Get heatmap data for visualization.
+    
+    Types:
+    - grid: Regular grid with risk intensity (for heatmap.js)
+    - segments: Road segments colored by risk (for Leaflet polylines)
+    """
+    twin = get_twin(city_key)
+    
+    if type not in ["grid", "segments"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid type. Use 'grid' or 'segments'"
+        )
+    
+    try:
+        heatmap_data = twin.get_heatmap_data(type)
+        
+        # Apply risk threshold filter for segments
+        if type == "segments" and risk_threshold > 0:
+            segments = heatmap_data.get("data", [])
+            filtered = [
+                s for s in segments
+                if s.get("risk_score", 0) >= risk_threshold
+            ]
+            heatmap_data["data"] = filtered
+            heatmap_data["filtered_count"] = len(filtered)
+            heatmap_data["risk_threshold"] = risk_threshold
+        
+        return heatmap_data
+        
+    except Exception as e:
+        logger.error(f"Heatmap generation failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate heatmap: {str(e)}"
+        )
+
+
+@router.get("/{city_key}/segments/top-dangerous")
+async def get_top_dangerous_segments(
+    city_key: str,
+    limit: int = Query(10, ge=1, le=100, description="Number of segments to return"),
+    min_risk: float = Query(60, ge=0, le=100, description="Minimum risk score")
+):
+    """
+    Get most dangerous road segments.
+    
+    Returns segments sorted by risk score (highest first).
+    """
+    twin = get_twin(city_key)
+    
+    try:
+        segments = twin.get_top_dangerous_segments(n=limit, min_risk=min_risk)
+        
+        return {
+            "city": city_key,
+            "segments": segments,
+            "count": len(segments),
+            "min_risk": min_risk,
+        }
+        
+    except Exception as e:
+        logger.error(f"Top dangerous query failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Query failed: {str(e)}"
+        )
+
+
+@router.get("/{city_key}/segment/{segment_id}")
+async def get_segment_details(city_key: str, segment_id: str):
+    """
+    Get detailed information for a specific road segment.
+    
+    Includes:
+    - Road name, type, length
+    - Risk score and category
+    - Accident history
+    - Weather/time distributions
+    """
+    twin = get_twin(city_key)
+    
+    try:
+        segment_info = twin.get_segment_info(segment_id)
+        
+        if segment_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Segment '{segment_id}' not found"
+            )
+        
+        return {
+            "city": city_key,
+            "segment": segment_info,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Segment query failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Query failed: {str(e)}"
+        )
+
+
+@router.post("/{city_key}/segment/{segment_id}/simulate")
+async def simulate_segment_scenario(
+    city_key: str,
+    segment_id: str,
+    scenario_type: str = Query(..., description="Scenario type: weather, time, traffic, intervention"),
+    weather: Optional[str] = Query(None, description="Weather condition"),
+    time_period: Optional[str] = Query(None, description="Time period"),
+    traffic_level: Optional[str] = Query(None, description="Traffic level"),
+    intervention_id: Optional[str] = Query(None, description="Intervention ID"),
+):
+    """
+    Simulate a scenario on a road segment.
+    
+    Scenario types:
+    - weather: Simulate different weather (requires weather param)
+    - time: Simulate different time of day (requires time_period param)
+    - traffic: Simulate different traffic level (requires traffic_level param)
+    - intervention: Simulate safety intervention (requires intervention_id param)
+    """
+    twin = get_twin(city_key)
+    
+    if not twin.scenario_simulator:
+        raise HTTPException(
+            status_code=503,
+            detail="Scenario simulator not available (ML predictor required)"
+        )
+    
+    try:
+        kwargs = {}
+        if weather:
+            kwargs["weather"] = weather
+        if time_period:
+            kwargs["time_period"] = time_period
+        if traffic_level:
+            kwargs["traffic_level"] = traffic_level
+        if intervention_id:
+            kwargs["intervention_id"] = intervention_id
+        
+        result = twin.simulate_scenario(
+            segment_id,
+            scenario_type,
+            **kwargs
+        )
+        
+        return {
+            "city": city_key,
+            "segment_id": segment_id,
+            "scenario_type": scenario_type,
+            "result": result,
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Simulation failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Simulation failed: {str(e)}"
+        )
+
+
+@router.post("/{city_key}/refresh")
+async def refresh_twin(city_key: str):
+    """
+    Rebuild digital twin with latest data.
+    
+    This will re-download road network, re-map accidents,
+    and recalculate all risks.
+    
+    Warning: Takes 5-10 minutes!
+    """
+    if city_key not in CITIES_CONFIG:
+        raise HTTPException(
+            status_code=404,
+            detail=f"City '{city_key}' not found"
+        )
+    
+    try:
+        logger.info(f"Refreshing digital twin for {city_key}...")
+        
+        # Get or create twin
+        if city_key in digital_twins:
+            twin = digital_twins[city_key]
+        else:
+            predictor = None
+            try:
+                from main import predictor_instance
+                predictor = predictor_instance
+            except ImportError:
+                pass
+            
+            twin = DigitalTwin(city_key, predictor=predictor)
+            digital_twins[city_key] = twin
+        
+        # Rebuild
+        metadata = twin.refresh_twin()
+        
+        return {
+            "status": "success",
+            "city": city_key,
+            "metadata": metadata,
+            "message": "Digital twin refreshed successfully",
+        }
+        
+    except Exception as e:
+        logger.error(f"Refresh failed for {city_key}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Refresh failed: {str(e)}"
+        )
+
+
+@router.get("/{city_key}/stats")
+async def get_twin_stats(city_key: str):
+    """
+    Get comprehensive statistics for a digital twin.
+    """
+    twin = get_twin(city_key)
+    
+    try:
+        stats = twin.get_stats()
+        
+        return {
+            "city": city_key,
+            "stats": stats,
+            "generated_at": datetime.now().isoformat(),
+        }
+        
+    except Exception as e:
+        logger.error(f"Stats query failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Query failed: {str(e)}"
+        )
+
+========== backend/api/routes_predict.py ==========
+import io
+import csv
+import pandas as pd
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+
+router = APIRouter(prefix="/api/predict", tags=["Prediction"])
+
+predictor_instance = None
+
+
+def get_predictor():
+    """Get or initialize the predictor singleton."""
+    global predictor_instance
+    if predictor_instance is None:
+        from ml.predictor import AccidentPredictor
+
+        predictor_instance = AccidentPredictor(dataset_key="primary")
+        predictor_instance.load_artifacts()
+    return predictor_instance
+
+
+class PredictionRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
+    Day_of_Week: Optional[str] = "Monday"
+    Time_of_Accident: Optional[str] = "12:00"
+    Accident_Location: Optional[str] = "Urban"
+    Nature_of_Accident: Optional[str] = "Head-on Collision"
+    Causes_D1: Optional[str] = "Overspeeding"
+    Road_Condition: Optional[str] = "Straight"
+    Weather_Conditions: Optional[str] = "Clear"
+    Intersection_Type: Optional[str] = "None"
+    Vehicle_Type_V1: Optional[str] = "Car"
+    Vehicle_Type_V2: Optional[str] = "Truck"
+    Number_of_Vehicles: Optional[int] = 2
+    model_name: Optional[str] = "XGBoost"
+
+
+@router.post("")
+def predict_severity(request: PredictionRequest):
+    """Make a severity prediction for new accident data."""
+    predictor = get_predictor()
+
+    if not predictor.loaded:
+        raise HTTPException(
+            status_code=503,
+            detail="Models not loaded. Please run the training pipeline first.",
+        )
+
+    input_data = request.dict()
+    model_name = input_data.pop("model_name", "XGBoost")
+
+    result = predictor.predict(input_data, model_name)
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@router.post("/batch")
+async def predict_batch(file: UploadFile = File(...), model_name: str = "XGBoost"):
+    """Batch prediction — accept CSV upload, return predictions."""
+    predictor = get_predictor()
+
+    if not predictor.loaded:
+        raise HTTPException(
+            status_code=503,
+            detail="Models not loaded. Please run the training pipeline first.",
+        )
+
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are accepted.")
+
+    try:
+        contents = await file.read()
+        if len(contents) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large. Maximum 50MB.")
+
+        df = pd.read_csv(io.BytesIO(contents))
+
+        if len(df) == 0:
+            raise HTTPException(status_code=400, detail="CSV file is empty.")
+
+        if len(df) > 10000:
+            raise HTTPException(status_code=400, detail="Maximum 10,000 rows allowed.")
+
+        result = predictor.predict_batch(df, model_name)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+
+@router.get("/models")
+def get_available_models():
+    """Return list of available models for prediction."""
+    predictor = get_predictor()
+    return {"models": predictor.get_available_models(), "loaded": predictor.loaded}
+
+========== backend/api/routes_what_if.py ==========
+# backend/api/routes_what_if.py
+
+from fastapi import APIRouter, HTTPException, Query, Body
+from typing import List, Optional
+from pydantic import BaseModel, Field
+import logging
+
+from config import INTERVENTIONS
+from api.routes_digital_twin import get_twin
+
+# ─────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────
+# ROUTER
+# ─────────────────────────────────────────────
+router = APIRouter(prefix="/api/what-if", tags=["What-If Analysis"])
+
+# ─────────────────────────────────────────────
+# REQUEST MODELS
+# ─────────────────────────────────────────────
+
+class InterventionAnalysisRequest(BaseModel):
+    intervention_id: str = Field(..., description="Intervention identifier")
+
+
+class CompareInterventionsRequest(BaseModel):
+    intervention_ids: List[str] = Field(..., description="List of intervention IDs to compare")
+
+
+class BatchAnalysisRequest(BaseModel):
+    segment_ids: List[str] = Field(..., description="List of segment IDs")
+    intervention_id: str = Field(..., description="Intervention to analyze")
+
+
+# ─────────────────────────────────────────────
+# ENDPOINTS
+# ─────────────────────────────────────────────
+
+@router.get("/interventions")
+async def list_interventions():
+    """
+    List all available safety interventions.
+    
+    Returns intervention details including:
+    - Name and description
+    - Cost per km
+    - Expected risk reduction
+    - Implementation time
+    """
+    interventions = []
+    
+    for key, config in INTERVENTIONS.items():
+        interventions.append({
+            "id": key,
+            "name": config["name"],
+            "description": config["description"],
+            "cost_per_km_inr": config["cost_per_km_inr"],
+            "expected_risk_reduction_min": config["expected_risk_reduction_min"],
+            "expected_risk_reduction_max": config["expected_risk_reduction_max"],
+            "implementation_months": config["implementation_months"],
+            "primary_benefit": config["primary_benefit"],
+        })
+    
+    return {
+        "interventions": interventions,
+        "total_interventions": len(interventions),
+    }
+
+
+@router.post("/{city_key}/segment/{segment_id}/analyze")
+async def analyze_intervention(
+    city_key: str,
+    segment_id: str,
+    request: InterventionAnalysisRequest
+):
+    """
+    Analyze impact of a safety intervention on a segment.
+    
+    Returns:
+    - Risk reduction percentage
+    - Lives saved per year
+    - Total cost
+    - ROI analysis
+    - Recommendation
+    """
+    twin = get_twin(city_key)
+    
+    if not twin.scenario_simulator:
+        raise HTTPException(
+            status_code=503,
+            detail="Scenario simulator not available"
+        )
+    
+    intervention_id = request.intervention_id
+    
+    if intervention_id not in INTERVENTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown intervention: {intervention_id}. "
+                   f"Available: {list(INTERVENTIONS.keys())}"
+        )
+    
+    try:
+        result = twin.scenario_simulator.simulate_intervention(
+            segment_id, intervention_id
+        )
+        
+        return {
+            "city": city_key,
+            "segment_id": segment_id,
+            "intervention": intervention_id,
+            "analysis": result,
+        }
+        
+    except Exception as e:
+        logger.error(f"Intervention analysis failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analysis failed: {str(e)}"
+        )
+
+
+@router.post("/{city_key}/segment/{segment_id}/compare")
+async def compare_interventions(
+    city_key: str,
+    segment_id: str,
+    request: CompareInterventionsRequest
+):
+    """
+    Compare multiple interventions for a segment.
+    
+    Returns interventions sorted by effectiveness (risk reduction).
+    """
+    twin = get_twin(city_key)
+    
+    if not twin.scenario_simulator:
+        raise HTTPException(
+            status_code=503,
+            detail="Scenario simulator not available"
+        )
+    
+    intervention_ids = request.intervention_ids
+    
+    # Validate interventions
+    for intervention_id in intervention_ids:
+        if intervention_id not in INTERVENTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown intervention: {intervention_id}"
+            )
+    
+    try:
+        result = twin.scenario_simulator.compare_interventions(
+            segment_id, intervention_ids
+        )
+        
+        return {
+            "city": city_key,
+            "segment_id": segment_id,
+            "comparison": result,
+        }
+        
+    except Exception as e:
+        logger.error(f"Intervention comparison failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Comparison failed: {str(e)}"
+        )
+
+
+@router.post("/{city_key}/batch-analyze")
+async def batch_analyze_intervention(
+    city_key: str,
+    request: BatchAnalysisRequest
+):
+    """
+    Analyze intervention impact across multiple segments.
+    
+    Useful for:
+    - Citywide intervention planning
+    - Budget allocation
+    - Prioritizing high-impact locations
+    """
+    twin = get_twin(city_key)
+    
+    if not twin.scenario_simulator:
+        raise HTTPException(
+            status_code=503,
+            detail="Scenario simulator not available"
+        )
+    
+    segment_ids = request.segment_ids
+    intervention_id = request.intervention_id
+    
+    if intervention_id not in INTERVENTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown intervention: {intervention_id}"
+        )
+    
+    if len(segment_ids) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 100 segments allowed per batch analysis"
+        )
+    
+    try:
+        results = []
+        total_risk_reduction = 0
+        total_lives_saved = 0
+        total_cost = 0
+        
+        for segment_id in segment_ids:
+            try:
+                result = twin.scenario_simulator.simulate_intervention(
+                    segment_id, intervention_id
+                )
+                results.append(result)
+                
+                total_risk_reduction += result.get("risk_reduction_pct", 0)
+                total_lives_saved += result.get("lives_saved_per_year", 0)
+                total_cost += result.get("cost_total_inr", 0)
+                
+            except Exception as e:
+                logger.warning(f"Segment {segment_id} failed: {e}")
+                continue
+        
+        if not results:
+            raise HTTPException(
+                status_code=500,
+                detail="All segments failed analysis"
+            )
+        
+        avg_risk_reduction = total_risk_reduction / len(results)
+        
+        # Calculate overall ROI
+        from config import VALUE_OF_STATISTICAL_LIFE_INR
+        total_value_saved = total_lives_saved * VALUE_OF_STATISTICAL_LIFE_INR
+        overall_roi_years = (
+            total_cost / total_value_saved
+            if total_value_saved > 0 else 999
+        )
+        
+        return {
+            "city": city_key,
+            "intervention_id": intervention_id,
+            "intervention_name": INTERVENTIONS[intervention_id]["name"],
+            "segments_analyzed": len(results),
+            "segments_failed": len(segment_ids) - len(results),
+            "total_risk_reduction_pct": round(total_risk_reduction, 2),
+            "avg_risk_reduction_pct": round(avg_risk_reduction, 2),
+            "total_lives_saved_per_year": round(total_lives_saved, 2),
+            "total_cost_inr": round(total_cost, 2),
+            "total_value_saved_per_year_inr": round(total_value_saved, 2),
+            "overall_roi_years": round(overall_roi_years, 2),
+            "cost_per_life_saved_inr": round(
+                total_cost / total_lives_saved if total_lives_saved > 0 else 0,
+                2
+            ),
+            "results": results,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch analysis failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch analysis failed: {str(e)}"
+        )
+
+
+@router.get("/{city_key}/recommendations")
+async def get_intervention_recommendations(
+    city_key: str,
+    budget: float = Query(..., description="Available budget in INR"),
+    max_segments: int = Query(10, ge=1, le=50, description="Maximum segments to analyze")
+):
+    """
+    Get optimized intervention recommendations within budget.
+    
+    Returns prioritized list of segment-intervention pairs
+    that maximize lives saved within budget constraints.
+    """
+    twin = get_twin(city_key)
+    
+    if not twin.scenario_simulator:
+        raise HTTPException(
+            status_code=503,
+            detail="Scenario simulator not available"
+        )
+    
+    try:
+        # Get top dangerous segments
+        top_segments = twin.get_top_dangerous_segments(n=max_segments, min_risk=60)
+        
+        recommendations = []
+        total_cost = 0
+        total_lives_saved = 0
+        
+        # For each segment, find best intervention
+        for segment in top_segments:
+            segment_id = segment["segment_id"]
+            
+            # Compare all interventions
+            best_intervention = None
+            best_lives_saved = 0
+            best_cost = 0
+            best_result = None
+            
+            for intervention_id in INTERVENTIONS.keys():
+                try:
+                    result = twin.scenario_simulator.simulate_intervention(
+                        segment_id, intervention_id
+                    )
+                    
+                    cost = result["cost_total_inr"]
+                    lives_saved = result["lives_saved_per_year"]
+                    
+                    # Check if within remaining budget
+                    if total_cost + cost <= budget:
+                        # Choose intervention with most lives saved
+                        if lives_saved > best_lives_saved:
+                            best_lives_saved = lives_saved
+                            best_intervention = intervention_id
+                            best_cost = cost
+                            best_result = result
+                            
+                except Exception as e:
+                    logger.debug(f"Intervention {intervention_id} failed: {e}")
+                    continue
+            
+            # Add best intervention to recommendations
+            if best_intervention and best_result:
+                recommendations.append({
+                    "segment_id": segment_id,
+                    "road_name": segment.get("road_name", "Unknown"),
+                    "current_risk": segment.get("composite_risk", 0),
+                    "intervention_id": best_intervention,
+                    "intervention_name": INTERVENTIONS[best_intervention]["name"],
+                    "lives_saved_per_year": best_lives_saved,
+                    "cost_inr": best_cost,
+                    "risk_reduction_pct": best_result.get("risk_reduction_pct", 0),
+                    "roi_years": best_result.get("roi_years", 0),
+                    "recommendation": best_result.get("recommendation", ""),
+                })
+                
+                total_cost += best_cost
+                total_lives_saved += best_lives_saved
+        
+        # Sort by lives saved (descending)
+        recommendations.sort(
+            key=lambda x: x["lives_saved_per_year"],
+            reverse=True
+        )
+        
+        return {
+            "city": city_key,
+            "budget_available_inr": budget,
+            "budget_used_inr": round(total_cost, 2),
+            "budget_remaining_inr": round(budget - total_cost, 2),
+            "total_lives_saved_per_year": round(total_lives_saved, 2),
+            "segments_recommended": len(recommendations),
+            "recommendations": recommendations,
+        }
+        
+    except Exception as e:
+        logger.error(f"Recommendations generation failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Recommendations failed: {str(e)}"
+        )
+
+========== backend/api/routes_eda.py ==========
+import os
+import json
+from fastapi import APIRouter, HTTPException
+from config import OUTPUTS_DIR, PLOTS_DIR
+
+router = APIRouter(prefix="/api/eda", tags=["EDA"])
+
+
+def load_eda_summary():
+    """Load EDA summary from saved JSON."""
+    path = os.path.join(OUTPUTS_DIR, "eda_summary.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+@router.get("/summary")
+def get_eda_summary():
+    """Return EDA summary statistics for all loaded datasets."""
+    summary = load_eda_summary()
+    if summary is None:
+        raise HTTPException(
+            status_code=404,
+            detail="EDA summary not found. Run training pipeline first.",
+        )
+    return summary
+
+
+@router.get("/summary/{dataset_key}")
+def get_eda_summary_by_dataset(dataset_key: str):
+    """Return EDA summary for a specific dataset."""
+    summary = load_eda_summary()
+    if summary is None:
+        raise HTTPException(status_code=404, detail="EDA summary not found.")
+    if dataset_key not in summary:
+        raise HTTPException(
+            status_code=404, detail=f"Dataset '{dataset_key}' not found in summary."
+        )
+    return summary[dataset_key]
+
+
+@router.get("/charts/{chart_name}")
+def get_chart_data(chart_name: str, dataset_key: str = "primary"):
+    """Return chart data as JSON for frontend rendering."""
+    summary = load_eda_summary()
+    if summary is None:
+        raise HTTPException(status_code=404, detail="EDA data not available.")
+
+    ds = summary.get(dataset_key)
+    if ds is None:
+        raise HTTPException(
+            status_code=404, detail=f"Dataset '{dataset_key}' not found."
+        )
+
+    severity_colors = ["#EF4444", "#F97316", "#F59E0B", "#10B981"]
+
+    if chart_name == "class_distribution":
+        dist = ds.get("class_distribution", {})
+        labels = list(dist.keys())
+        values = list(dist.values())
+        colors = severity_colors[: len(labels)]
+        return {
+            "chart_type": "donut",
+            "title": "Accident Severity Distribution",
+            "labels": labels,
+            "values": values,
+            "colors": colors,
+        }
+
+    chart_data_path = os.path.join(
+        OUTPUTS_DIR, f"chart_data_{chart_name}_{dataset_key}.json"
+    )
+    if os.path.exists(chart_data_path):
+        with open(chart_data_path) as f:
+            return json.load(f)
+
+    if chart_name == "accidents_by_hour":
+        return {
+            "chart_type": "area",
+            "title": "Accidents by Hour of Day",
+            "labels": list(range(24)),
+            "values": [0] * 24,
+            "message": "Time-based data will be available after training pipeline runs with time features.",
+        }
+
+    if chart_name == "accidents_by_day":
+        days = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ]
+        return {
+            "chart_type": "bar",
+            "title": "Accidents by Day of Week",
+            "labels": days,
+            "values": [0] * 7,
+            "message": "Day-based data will be available after training pipeline runs.",
+        }
+
+    if chart_name == "accidents_by_weather":
+        return {
+            "chart_type": "grouped_bar",
+            "title": "Weather Impact on Severity",
+            "labels": [],
+            "datasets": [],
+            "message": "Weather data will be available after training pipeline runs.",
+        }
+
+    if chart_name == "accidents_by_vehicle":
+        return {
+            "chart_type": "pie",
+            "title": "Vehicle Type Distribution",
+            "labels": [],
+            "values": [],
+            "message": "Vehicle data will be available after training pipeline runs.",
+        }
+
+    if chart_name == "severity_by_cause":
+        return {
+            "chart_type": "horizontal_bar",
+            "title": "Top Accident Causes by Severity",
+            "labels": [],
+            "datasets": [],
+            "message": "Cause data will be available after training pipeline runs.",
+        }
+
+    if chart_name == "monthly_trend":
+        return {
+            "chart_type": "line",
+            "title": "Monthly Accident Trend",
+            "labels": [],
+            "datasets": [],
+            "message": "Monthly trend data will be available after training pipeline runs.",
+        }
+
+    if chart_name == "correlation_matrix":
+        return {
+            "chart_type": "heatmap",
+            "title": "Feature Correlation Matrix",
+            "labels": [],
+            "values": [],
+            "message": "Correlation data will be available after training pipeline runs.",
+        }
+
+    raise HTTPException(status_code=404, detail=f"Chart '{chart_name}' not found.")
+
+
+@router.get("/plots/{plot_name}")
+def get_plot_image(plot_name: str):
+    """Return a saved plot as base64 encoded image."""
+    import base64
+
+    plot_path = os.path.join(PLOTS_DIR, f"{plot_name}.png")
+    if not os.path.exists(plot_path):
+        raise HTTPException(status_code=404, detail=f"Plot '{plot_name}' not found.")
+
+    with open(plot_path, "rb") as f:
+        img_data = f.read()
+
+    b64 = base64.b64encode(img_data).decode("utf-8")
+    return {"image_base64": f"data:image/png;base64,{b64}", "plot_name": plot_name}
+
+========== backend/api/routes_models.py ==========
+import os
+import json
+from fastapi import APIRouter, HTTPException
+from config import OUTPUTS_DIR
+
+router = APIRouter(prefix="/api/models", tags=["Models"])
+
+
+def load_model_comparison():
+    """Load model comparison results from saved JSON."""
+    path = os.path.join(OUTPUTS_DIR, "model_comparison.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+@router.get("/comparison")
+def get_model_comparison():
+    """Return model comparison table with all metrics."""
+    comparison = load_model_comparison()
+    if comparison is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Model comparison not found. Run training pipeline first.",
+        )
+    return comparison
+
+
+@router.get("/{model_name}/confusion-matrix")
+def get_confusion_matrix(model_name: str):
+    """Return confusion matrix data for a specific model."""
+    comparison = load_model_comparison()
+    if comparison is None:
+        raise HTTPException(status_code=404, detail="Model results not found.")
+
+    for model in comparison.get("models", []):
+        if model["model_name"] == model_name:
+            return {
+                "model": model_name,
+                "matrix": model.get("confusion_matrix", []),
+                "normalized_matrix": model.get("normalized_confusion_matrix", []),
+                "labels": model.get("class_labels", []),
+            }
+
+    available = [m["model_name"] for m in comparison.get("models", [])]
+    raise HTTPException(
+        status_code=404,
+        detail=f"Model '{model_name}' not found. Available: {available}",
+    )
+
+
+@router.get("/{model_name}/roc-data")
+def get_roc_data(model_name: str):
+    """Return ROC curve data points for a specific model."""
+    comparison = load_model_comparison()
+    if comparison is None:
+        raise HTTPException(status_code=404, detail="Model results not found.")
+
+    for model in comparison.get("models", []):
+        if model["model_name"] == model_name:
+            return {"model": model_name, "classes": model.get("roc_data", {})}
+
+    available = [m["model_name"] for m in comparison.get("models", [])]
+    raise HTTPException(
+        status_code=404,
+        detail=f"Model '{model_name}' not found. Available: {available}",
+    )
+
+
+@router.get("/{model_name}/metrics")
+def get_model_metrics(model_name: str):
+    """Return detailed metrics for a specific model."""
+    comparison = load_model_comparison()
+    if comparison is None:
+        raise HTTPException(status_code=404, detail="Model results not found.")
+
+    for model in comparison.get("models", []):
+        if model["model_name"] == model_name:
+            return model
+
+    available = [m["model_name"] for m in comparison.get("models", [])]
+    raise HTTPException(
+        status_code=404,
+        detail=f"Model '{model_name}' not found. Available: {available}",
+    )
+
+
+@router.get("/best")
+def get_best_model():
+    """Return info about the best performing model."""
+    comparison = load_model_comparison()
+    if comparison is None:
+        raise HTTPException(status_code=404, detail="Model results not found.")
+
+    return {
+        "best_model": comparison.get("best_model"),
+        "best_metric": comparison.get("best_metric"),
+        "best_value": comparison.get("best_value"),
+    }
+
+========== backend/api/routes_shap.py ==========
+import os
+import json
+from fastapi import APIRouter, HTTPException
+from config import OUTPUTS_DIR, SHAP_DIR
+
+router = APIRouter(prefix="/api/shap", tags=["SHAP"])
+
+
+@router.get("/feature-importance")
+def get_shap_feature_importance(model_name: str = None):
+    """Return SHAP feature importance. If model_name given, return for that model."""
+    if model_name:
+        specific_path = os.path.join(
+            SHAP_DIR, f"shap_feature_importance_{model_name}_primary.json"
+        )
+        if os.path.exists(specific_path):
+            with open(specific_path) as f:
+                features = json.load(f)
+            return {"model": model_name, "features": features}
+
+    combined_path = os.path.join(OUTPUTS_DIR, "shap_feature_importance.json")
+    if os.path.exists(combined_path):
+        with open(combined_path) as f:
+            data = json.load(f)
+        return data
+
+    raise HTTPException(
+        status_code=404,
+        detail="SHAP feature importance not found. Run training pipeline first.",
+    )
+
+
+@router.get("/feature-importance/{model_name}")
+def get_shap_for_model(model_name: str, dataset_key: str = "primary"):
+    """Return SHAP feature importance for a specific model."""
+    path = os.path.join(
+        SHAP_DIR, f"shap_feature_importance_{model_name}_{dataset_key}.json"
+    )
+    if not os.path.exists(path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"SHAP data not found for model '{model_name}'. Run SHAP analysis first.",
+        )
+
+    with open(path) as f:
+        features = json.load(f)
+
+    return {"model": model_name, "dataset": dataset_key, "features": features}
+
+
+@router.get("/summary-plot")
+def get_shap_summary_plot(model_name: str = None, dataset_key: str = "primary"):
+    """Return SHAP summary plot as base64 PNG."""
+    import base64
+
+    if model_name:
+        plot_path = os.path.join(
+            SHAP_DIR, f"shap_summary_{model_name}_{dataset_key}.png"
+        )
+    else:
+        all_shap_path = os.path.join(SHAP_DIR, f"all_shap_results_{dataset_key}.json")
+        if os.path.exists(all_shap_path):
+            with open(all_shap_path) as f:
+                all_data = json.load(f)
+            first_model = list(all_data.keys())[0] if all_data else None
+            if first_model:
+                plot_path = os.path.join(
+                    SHAP_DIR, f"shap_summary_{first_model}_{dataset_key}.png"
+                )
+            else:
+                raise HTTPException(status_code=404, detail="No SHAP data available.")
+        else:
+            raise HTTPException(status_code=404, detail="SHAP data not found.")
+
+    if not os.path.exists(plot_path):
+        raise HTTPException(
+            status_code=404, detail=f"SHAP summary plot not found at {plot_path}"
+        )
+
+    with open(plot_path, "rb") as f:
+        img_data = f.read()
+
+    b64 = base64.b64encode(img_data).decode("utf-8")
+    return {"image_base64": f"data:image/png;base64,{b64}", "model": model_name}
+
+
+@router.get("/bar-plot/{model_name}")
+def get_shap_bar_plot(model_name: str, dataset_key: str = "primary"):
+    """Return SHAP bar plot as base64 PNG."""
+    import base64
+
+    plot_path = os.path.join(SHAP_DIR, f"shap_bar_{model_name}_{dataset_key}.png")
+    if not os.path.exists(plot_path):
+        raise HTTPException(
+            status_code=404, detail=f"SHAP bar plot not found for '{model_name}'."
+        )
+
+    with open(plot_path, "rb") as f:
+        img_data = f.read()
+
+    b64 = base64.b64encode(img_data).decode("utf-8")
+    return {"image_base64": f"data:image/png;base64,{b64}", "model": model_name}
+
+
+@router.get("/all-models")
+def get_all_shap_results(dataset_key: str = "primary"):
+    """Return SHAP results summary for all models."""
+    path = os.path.join(SHAP_DIR, f"all_shap_results_{dataset_key}.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="SHAP results not found.")
+
+    with open(path) as f:
+        data = json.load(f)
+
+    return {"dataset": dataset_key, "models": data}

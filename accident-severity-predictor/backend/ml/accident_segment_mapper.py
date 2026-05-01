@@ -600,6 +600,36 @@ class AccidentSegmentMapper:
 
         return aggregated
 
+
+    # ─────────────────────────────────────────
+    # DELHI REAL DATASETS MAPPING
+    # ─────────────────────────────────────────
+
+    def map_delhi_accidents(self) -> dict:
+        """Map accidents from all Delhi real datasets to road segments."""
+        from ml.delhi_data_loader import load_all_delhi_accidents
+        logger.info("Loading Delhi real accident datasets...")
+        accidents = load_all_delhi_accidents()
+        if not accidents:
+            logger.warning("No Delhi accident data loaded")
+            return {}
+        mapped = {}
+        mapped_count = 0
+        for acc in accidents:
+            lat = acc.get("lat")
+            lon = acc.get("lon")
+            if lat is None or lon is None:
+                continue
+            segment_id, distance = self._find_nearest_segment(lat, lon)
+            if segment_id is None:
+                continue
+            if segment_id not in mapped:
+                mapped[segment_id] = []
+            mapped[segment_id].append(acc)
+            mapped_count += 1
+        logger.info(f"Delhi real data: {mapped_count:,} accidents -> {len(mapped):,} segments")
+        return mapped
+
     def map_all_accidents(self) -> dict:
         """
         Map accidents from ALL datasets to segments.
@@ -615,7 +645,7 @@ class AccidentSegmentMapper:
         combined_mapping = {}
 
         # Map ETP_4 accidents
-        logger.info("\n[1/2] Mapping ETP_4 accidents...")
+        logger.info("\n[1/3] Mapping ETP_4 accidents...")
         etp4_mapping = self.map_etp4_accidents()
 
         for seg_id, accidents in etp4_mapping.items():
@@ -624,10 +654,26 @@ class AccidentSegmentMapper:
             combined_mapping[seg_id].extend(accidents)
 
         # Map Road.csv accidents
-        logger.info("\n[2/2] Mapping Road.csv accidents...")
+        logger.info("\n[2/3] Mapping Road.csv accidents...")
         road_mapping = self.map_road_csv_accidents()
 
         for seg_id, accidents in road_mapping.items():
+            if seg_id not in combined_mapping:
+                combined_mapping[seg_id] = []
+            combined_mapping[seg_id].extend(accidents)
+
+        # Map Delhi real datasets
+        logger.info("\n[3/3] Mapping Delhi real datasets...")
+        delhi_mapping = self.map_delhi_accidents()
+        for seg_id, accidents in delhi_mapping.items():
+            if seg_id not in combined_mapping:
+                combined_mapping[seg_id] = []
+            combined_mapping[seg_id].extend(accidents)
+
+        # Map Delhi real datasets
+        logger.info("\n[3/3] Mapping Delhi real datasets...")
+        delhi_mapping = self.map_delhi_accidents()
+        for seg_id, accidents in delhi_mapping.items():
             if seg_id not in combined_mapping:
                 combined_mapping[seg_id] = []
             combined_mapping[seg_id].extend(accidents)

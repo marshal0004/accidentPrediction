@@ -338,3 +338,8 @@ for d in [
     DIGITAL_TWIN_DIR,
 ]:
     os.makedirs(d, exist_ok=True)
+
+# ─────────────────────────────────────────────
+# DELHI DATASETS
+# ─────────────────────────────────────────────
+DELHI_DATASETS_DIR = os.path.join(DATA_DIR, "delhiDatasets")

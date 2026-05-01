@@ -1,0 +1,225 @@
+nohup: ignoring input
+INFO:     Will watch for changes in these directories: ['/home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [213490] using StatReload
+INFO:ml.accident_segment_mapper_delhi_patch:AccidentSegmentMapper patched with Delhi dataset support
+INFO:     Started server process [213497]
+INFO:     Waiting for application startup.
+INFO:ml.digital_twin:DigitalTwin initialized for: New Delhi
+INFO:ml.road_network_loader:RoadNetworkLoader initialized for: New Delhi, India
+INFO:ml.road_network_loader:Valid cache found for delhi (cached at 2026-04-05)
+INFO:ml.digital_twin:DigitalTwin initialized for: Dehradun
+INFO:ml.road_network_loader:RoadNetworkLoader initialized for: Dehradun, India
+INFO:ml.road_network_loader:No cache found for dehradun
+INFO:ml.digital_twin:DigitalTwin initialized for: Bangalore
+INFO:ml.road_network_loader:RoadNetworkLoader initialized for: Bangalore, India
+INFO:ml.road_network_loader:No cache found for bangalore
+INFO:     Application startup complete.
+
+============================================================
+  Indian Road Accident Severity Prediction API v2.0
+  Starting up...
+============================================================
+  [OK] Database tables created/verified
+
+  Dataset Status:
+    Primary   (ETP_4_New_Data_Accidents.csv): ✗ NOT FOUND
+    Secondary (Road.csv): ✗ NOT FOUND
+
+  [DOWNLOAD] Primary dataset:
+    URL: https://doi.org/10.5281/zenodo.16946653
+    Save as: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/ETP_4_New_Data_Accidents.csv
+
+  [DOWNLOAD] Secondary dataset:
+    URL: https://www.kaggle.com/datasets/s3programmer/road-accident-severity-in-india
+    Save as: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/Road.csv
+
+  Loading ML Models...
+  [OK] 2 model artifacts found:
+    - scaler.joblib
+    - label_encoder.joblib
+
+  Loading prediction artifacts for 'primary'...
+  [OK] Scaler loaded
+  [OK] Label encoder loaded
+  [OK] Feature info loaded (28 features)
+  [OK] RandomForest model loaded from /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/models/primary/RandomForest_model.joblib
+  [OK] XGBoost model loaded from /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/models/primary/XGBoost_model.joblib
+  [OK] GradientBoosting model loaded from /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/models/primary/GradientBoosting_model.joblib
+  [OK] SVM model loaded from /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/models/primary/SVM_model.joblib
+  [OK] LogisticRegression model loaded from /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/models/primary/LogisticRegression_model.joblib
+  [OK] 5 models loaded
+  [OK] Predictor loaded: 5 models ready
+
+  Loading Digital Twins...
+  [INFO] delhi twin not built yet. Call GET /api/twin/delhi/initialize to build.
+  [INFO] dehradun twin not built yet. Call GET /api/twin/dehradun/initialize to build.
+  [INFO] bangalore twin not built yet. Call GET /api/twin/bangalore/initialize to build.
+
+  Existing API Endpoints:
+    GET  /api/health
+    GET  /api/eda/summary
+    GET  /api/eda/charts/{name}
+    GET  /api/models/comparison
+    GET  /api/shap/feature-importance
+    POST /api/predict
+    POST /api/predict/batch
+    GET  /api/datasets/info
+    GET  /api/data/preview/{key}
+
+  Digital Twin API Endpoints:
+    GET  /api/twin/cities
+    GET  /api/twin/{city}/initialize
+    GET  /api/twin/{city}/metadata
+    GET  /api/twin/{city}/heatmap
+    GET  /api/twin/{city}/segments/top-dangerous
+    GET  /api/twin/{city}/segment/{id}
+    POST /api/twin/{city}/segment/{id}/simulate
+    POST /api/twin/{city}/refresh
+    GET  /api/twin/{city}/stats
+
+  What-If API Endpoints:
+    GET  /api/what-if/interventions
+    POST /api/what-if/{city}/segment/{id}/analyze
+    POST /api/what-if/{city}/segment/{id}/compare
+    POST /api/what-if/{city}/batch-analyze
+    GET  /api/what-if/{city}/recommendations
+
+  Digital Twin Status:
+    ○ delhi: not_initialized
+    ○ dehradun: not_initialized
+    ○ bangalore: not_initialized
+
+  Server running at http://0.0.0.0:8000
+  Docs at http://localhost:8000/docs
+============================================================
+
+INFO:     127.0.0.1:43560 - "GET /api/health HTTP/1.1" 200 OK
+INFO:api.routes_digital_twin:Initializing digital twin for delhi...
+INFO:api.routes_digital_twin:Using ML predictor for risk calculation
+INFO:ml.digital_twin:DigitalTwin initialized for: New Delhi
+INFO:ml.digital_twin:============================================================
+INFO:ml.digital_twin:BUILDING DIGITAL TWIN: New Delhi
+INFO:ml.digital_twin:============================================================
+INFO:ml.digital_twin:
+[1/4] Loading road network...
+INFO:ml.road_network_loader:RoadNetworkLoader initialized for: New Delhi, India
+INFO:ml.road_network_loader:Valid cache found for delhi (cached at 2026-04-05)
+INFO:ml.road_network_loader:Loading cached network from /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/road_networks/delhi/delhi_roads.graphml...
+INFO:ml.road_network_loader:Network loaded in 1.1s: 10,166 nodes, 24,399 edges
+INFO:ml.road_network_loader:Converting graph to GeoDataFrame...
+INFO:ml.road_network_loader:GeoDataFrame ready: 24,399 road segments
+INFO:ml.digital_twin:✅ Step 1 complete (1.5s)
+INFO:ml.digital_twin:
+[2/4] Mapping accidents to segments...
+/home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/ml/accident_segment_mapper.py:225: UserWarning: Geometry is in a geographic CRS. Results from 'centroid' are likely incorrect. Use 'GeoSeries.to_crs()' to re-project geometries to a projected CRS before this operation.
+
+  centroids = self.edges_gdf.geometry.centroid
+INFO:ml.accident_segment_mapper:Edge preparation complete
+INFO:ml.accident_segment_mapper:AccidentSegmentMapper initialized: 24,399 road segments
+INFO:ml.accident_segment_mapper_delhi_patch:Patched map_all_accidents: including Delhi datasets
+WARNING:ml.accident_segment_mapper:ETP_4 dataset not found: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/ETP_4_New_Data_Accidents.csv
+WARNING:ml.accident_segment_mapper:Road.csv not found: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/Road.csv
+INFO:ml.delhi_data_loader:  delhi_accident_dataset1: 0 location records
+INFO:ml.delhi_data_loader:  delhi_accident_dataset2: 20000 location records
+INFO:ml.delhi_data_loader:  delhi_accident_dataset4: 0 location records
+INFO:ml.delhi_data_loader:  delhi_accident_dataset5: 342 location records
+INFO:ml.delhi_data_loader:  delhi_accident_dataset9: 1457 location records
+INFO:ml.delhi_data_loader:  delhi_accident_dataset_all_csvs10: 2157 location records
+INFO:ml.delhi_data_loader:  delhi_accident_datasets_8: 701 location records
+INFO:ml.delhi_data_loader:  delhi_circle_wise_accidents_6: 616 location records
+INFO:ml.delhi_data_loader:  delhi_road_accidents_dataset7: 628 location records
+INFO:ml.delhi_data_loader:  delhi_road_crashes_dataset3: 904 location records
+INFO:ml.delhi_data_loader:  TOTAL Delhi records: 26805 from 152 CSVs
+INFO:ml.accident_segment_mapper_delhi_patch:Mapping 26805 Delhi records to segments...
+INFO:ml.accident_segment_mapper_delhi_patch:Delhi mapping: 10399 mapped, 16406 unmapped
+INFO:ml.accident_segment_mapper_delhi_patch:Delhi datasets added: 1841 segments
+INFO:ml.accident_segment_mapper_delhi_patch:Combined: 10399 accidents across 1841 segments
+INFO:ml.accident_segment_mapper:Mapping saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/mapped_accidents/delhi/segment_mapping.json (3080.9 KB)
+INFO:ml.accident_segment_mapper:Stats saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/data/mapped_accidents/delhi/mapping_stats.json
+INFO:ml.digital_twin:✅ Step 2 complete (22.2s)
+INFO:ml.digital_twin:
+[3/4] Calculating segment risk scores...
+INFO:ml.segment_risk_calculator:SegmentRiskCalculator initialized for delhi: 1,841 segments
+INFO:ml.segment_risk_calculator:==================================================
+INFO:ml.segment_risk_calculator:Calculating segment risk scores...
+INFO:ml.segment_risk_calculator:==================================================
+INFO:ml.segment_risk_calculator:Processed 100 segments...
+INFO:ml.segment_risk_calculator:Processed 200 segments...
+INFO:ml.segment_risk_calculator:Processed 300 segments...
+INFO:ml.segment_risk_calculator:Processed 400 segments...
+INFO:ml.segment_risk_calculator:Processed 500 segments...
+INFO:ml.segment_risk_calculator:Processed 600 segments...
+INFO:ml.segment_risk_calculator:Processed 700 segments...
+INFO:ml.segment_risk_calculator:Processed 800 segments...
+INFO:ml.segment_risk_calculator:Processed 900 segments...
+INFO:ml.segment_risk_calculator:Processed 1,000 segments...
+INFO:ml.segment_risk_calculator:Processed 1,100 segments...
+INFO:ml.segment_risk_calculator:Processed 1,200 segments...
+INFO:ml.segment_risk_calculator:Processed 1,300 segments...
+INFO:ml.segment_risk_calculator:Processed 1,400 segments...
+INFO:ml.segment_risk_calculator:Processed 1,500 segments...
+INFO:ml.segment_risk_calculator:Processed 1,600 segments...
+INFO:ml.segment_risk_calculator:Processed 1,700 segments...
+INFO:ml.segment_risk_calculator:Processed 1,800 segments...
+INFO:ml.segment_risk_calculator:
+Risk calculation complete: 1,841 segments
+INFO:ml.segment_risk_calculator:Risk distribution: {'Very Low': 1018, 'Low': 328, 'Moderate': 495, 'High': 0, 'Very High': 0}
+INFO:ml.segment_risk_calculator:High/Very High risk segments: 0
+INFO:ml.segment_risk_calculator:Risks saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/digital_twin/delhi/segment_risks.json (806.6 KB)
+INFO:ml.segment_risk_calculator:Stats saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/digital_twin/delhi/risk_stats.json
+INFO:ml.digital_twin:✅ Step 3 complete (6.4s)
+INFO:ml.digital_twin:
+[4/4] Generating heatmaps...
+INFO:ml.heatmap_generator:Edges enriched with risk data
+INFO:ml.heatmap_generator:HeatmapGenerator initialized for delhi: 1,841 segments with risk data
+INFO:ml.heatmap_generator:Saving heatmap data...
+INFO:ml.heatmap_generator:Generating grid-based heatmap...
+INFO:ml.heatmap_generator:Using 1841 segments with risk data for grid
+INFO:ml.heatmap_generator:Processing grid point 500/2500...
+INFO:ml.heatmap_generator:Processing grid point 1000/2500...
+INFO:ml.heatmap_generator:Processing grid point 1500/2500...
+INFO:ml.heatmap_generator:Processing grid point 2000/2500...
+INFO:ml.heatmap_generator:Processing grid point 2500/2500...
+INFO:ml.heatmap_generator:Grid heatmap generated: 2,500 points
+INFO:ml.heatmap_generator:Generating segment-based heatmap...
+INFO:ml.heatmap_generator:Segment heatmap generated: 24,399 segments
+INFO:ml.heatmap_generator:Grid heatmap saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/digital_twin/delhi/heatmap_grid.json (179.9 KB)
+INFO:ml.heatmap_generator:Segment heatmap saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/digital_twin/delhi/heatmap_segments.json (13620.1 KB)
+INFO:ml.heatmap_generator:Creating Folium test map...
+WARNING:ml.heatmap_generator:Folium map generation failed: unsupported operand type(s) for %: 'tuple' and 'int'
+INFO:ml.digital_twin:✅ Step 4 complete (159.5s)
+INFO:ml.scenario_simulator:ScenarioSimulator initialized for delhi: 1,841 segments
+INFO:ml.digital_twin:Scenario simulator initialized with ML predictor
+INFO:ml.digital_twin:Metadata saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/digital_twin/delhi/twin_metadata.json
+INFO:ml.digital_twin:Top dangerous segments saved: /home/neeraj/accidentPredictionProjectNR/accident-severity-predictor/backend/outputs/digital_twin/delhi/top_dangerous.json
+INFO:ml.digital_twin:
+============================================================
+INFO:ml.digital_twin:✅ DIGITAL TWIN BUILD COMPLETE
+INFO:ml.digital_twin:============================================================
+INFO:ml.digital_twin:Total time: 189.7s (3.2 min)
+INFO:ml.digital_twin:Total segments: 24,399
+INFO:ml.digital_twin:Mapped accidents: 10,399
+INFO:ml.digital_twin:High-risk segments: 0
+INFO:ml.digital_twin:============================================================
+INFO:api.routes_digital_twin:Digital twin ready for delhi
+INFO:     127.0.0.1:43572 - "GET /api/twin/delhi/initialize?force_rebuild=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58996 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44970 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44984 - "GET /api/eda/charts/class_distribution?dataset_key=primary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44982 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48782 - "GET /api/eda/charts/severity_by_cause?dataset_key=primary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44992 - "GET /api/eda/charts/accidents_by_hour?dataset_key=primary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58996 - "GET /api/eda/charts/accidents_by_weather?dataset_key=primary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44982 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44984 - "GET /api/eda/charts/accidents_by_vehicle?dataset_key=primary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44970 - "GET /api/eda/charts/monthly_trend?dataset_key=primary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38148 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40860 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38730 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41058 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [213497]
+INFO:     Stopping reloader process [213490]
